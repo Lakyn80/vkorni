@@ -69,12 +69,15 @@ def _build_message(
 ) -> str:
     parts = []
 
-    # Inline photo — prefer [IMG] with original Wikimedia URL
+    # Inline photo — prefer [IMG] with original Wikimedia URL, centered
+    # Wikimedia supports serving any pixel width via the /thumb/ URL pattern
     if photo_source_url:
-        parts.append(f"[IMG]{photo_source_url}[/IMG]")
+        import re as _re
+        small_url = _re.sub(r"/\d+px-", "/400px-", photo_source_url)
+        parts.append(f"[CENTER][IMG]{small_url}[/IMG][/CENTER]")
     else:
         for aid in attachment_ids[:1]:
-            parts.append(f"[ATTACH=full]{aid}[/ATTACH]")
+            parts.append(f"[CENTER][ATTACH=full]{aid}[/ATTACH][/CENTER]")
 
     if parts:
         parts.append("")

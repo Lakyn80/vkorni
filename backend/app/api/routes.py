@@ -2,7 +2,7 @@ import logging
 import os
 import re
 from uuid import uuid4
-from fastapi import APIRouter, HTTPException, Query, UploadFile, File
+from fastapi import APIRouter, Body, HTTPException, Query, UploadFile, File
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
@@ -292,3 +292,91 @@ def list_accepted_images(name: str):
         for p in sorted(all_files)
     ]
     return _response({"name": person_name, "images": rel_paths})
+
+
+# ---------------------------------------------------------------------------
+# Batch biography endpoints
+# ---------------------------------------------------------------------------
+
+class BatchRequest(BaseModel):
+    names: list[str]
+    style_name: str | None = None
+
+
+@router.post("/batch")
+def create_batch(payload: BatchRequest):
+    """
+    Submit a list of names for batch biography generation.
+
+    Enqueues each name as an independent RQ job on the 'bios' queue.
+    Workers process max 2 concurrently (controlled by docker-compose scale).
+    Returns immediately with batch_id — never blocks.
+    """
+    from app.services.batch_service import create_batch as _create_batch
+    from app.workers.queue_backend import enqueue_job
+    from app.workers.bio_worker import process_biography
+
+    names = [n.strip() for n in payload.names if n.strip()]
+    if not names:
+        raise HTTPException(status_code=400, detail="No names provided")
+    if len(names) > 500:
+        raise HTTPException(status_code=400, detail="Too many names (max 500 per batch)")
+
+    try:
+        batch_id = _create_batch(names)
+        for name in names:
+            enqueue_job(
+                process_biography,
+                batch_id,
+                name,
+                payload.style_name,
+                queue="bios",
+            )
+    except Exception as exc:
+        logger.error("Failed to create batch: %s", exc)
+        raise HTTPException(status_code=503, detail="Queue unavailable — please retry later")
+
+    logger.info("Batch %s created with %d names", batch_id, len(names))
+    return _response({"batch_id": batch_id, "total": len(names), "status": "queued"})
+
+
+@router.get("/batch/{batch_id}")
+def get_batch(batch_id: str):
+    """
+    Poll batch status.
+
+    Returns per-job breakdown: queued / running / done / failed counts + results list.
+    """
+    from app.services.batch_service import get_batch_status
+
+    data = get_batch_status(batch_id)
+    if data is None:
+        raise HTTPException(status_code=404, detail="Batch not found (expired or invalid id)")
+    return _response(data)
+
+
+@router.post("/batch/{batch_id}/retry")
+def retry_batch(batch_id: str):
+    """
+    Re-enqueue all failed jobs in a batch.
+
+    Safe to call multiple times — only re-queues jobs with status='failed'.
+    """
+    from app.services.batch_service import get_failed_names, update_job
+    from app.workers.queue_backend import enqueue_job
+    from app.workers.bio_worker import process_biography
+
+    failed = get_failed_names(batch_id)
+    if not failed:
+        return _response({"batch_id": batch_id, "retried": 0, "message": "No failed jobs"})
+
+    retried = 0
+    for name in failed:
+        try:
+            update_job(batch_id, name, status="queued")
+            enqueue_job(process_biography, batch_id, name, queue="bios")
+            retried += 1
+        except Exception as exc:
+            logger.error("Failed to re-enqueue '%s': %s", name, exc)
+
+    return _response({"batch_id": batch_id, "retried": retried})

@@ -19,7 +19,7 @@ from app.config import settings
 logger = logging.getLogger(__name__)
 
 _redis_conn: Redis | None = None
-_queue: Queue | None = None
+_queues: dict[str, Queue] = {}
 
 
 def _get_redis() -> Redis:
@@ -29,22 +29,27 @@ def _get_redis() -> Redis:
     return _redis_conn
 
 
-def _get_queue() -> Queue:
-    global _queue
-    if _queue is None:
-        _queue = Queue("images", connection=_get_redis())
-    return _queue
+def _get_queue(name: str = "images") -> Queue:
+    if name not in _queues:
+        _queues[name] = Queue(name, connection=_get_redis())
+    return _queues[name]
 
 
-def enqueue_job(func: Callable, *args, **kwargs) -> str:
+def enqueue_job(func: Callable, *args, queue: str = "images", **kwargs) -> str:
     """
     Enqueue a function for background execution.
+
+    Args:
+        func: The function to execute.
+        *args: Positional arguments for func.
+        queue: Queue name ("images" or "bios"). Default: "images".
+        **kwargs: Keyword arguments for func.
 
     Returns the job ID string, or raises RuntimeError if Redis is unavailable.
     """
     from rq import Retry
 
-    q = _get_queue()
+    q = _get_queue(queue)
     job = q.enqueue(
         func,
         *args,
@@ -54,7 +59,7 @@ def enqueue_job(func: Callable, *args, **kwargs) -> str:
         failure_ttl=3600,
         retry=Retry(max=settings.worker_max_retries, interval=settings.worker_retry_delay),
     )
-    logger.info("Enqueued job %s → %s", job.id, func.__name__)
+    logger.info("Enqueued job %s → %s (queue=%s)", job.id, func.__name__, queue)
     return job.id
 
 

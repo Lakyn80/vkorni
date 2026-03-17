@@ -22,7 +22,7 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
-    command: rq worker images --url ${REDIS_URL}
+    command: rq worker bios images --url ${REDIS_URL}
     volumes:
       - ./backend/static/photos:/app/static/photos
       - ./backend/static/accepted_images:/app/static/accepted_images
@@ -35,7 +35,9 @@ services:
     dns:
       - 8.8.8.8
       - 1.1.1.1
-    restart: unless-stopped
+    restart: always
+    deploy:
+      replicas: 2
 
   frontend:
     build:
