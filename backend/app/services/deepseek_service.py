@@ -3,129 +3,73 @@ import re
 import requests
 import logging
 
+from app.services.prompt_service import pick_angle, build_system_prompt, build_user_message
+
 DEEPSEEK_KEY = os.getenv("DEEPSEEK_KEY")
 DEEPSEEK_URL = "https://api.deepseek.com/chat/completions"
 
 logger = logging.getLogger(__name__)
 
 
-def generate_text(context: str, style: str | None) -> str:
+def _clean(raw: str) -> str:
+    """Strip Markdown artifacts from the model output."""
+    cleaned = raw.replace("***", "").replace("##", "").replace("#", "")
+    cleaned = re.sub(r"-{3,}", "", cleaned)
+    cleaned = re.sub(r"_{3,}", "", cleaned)
+    cleaned = re.sub(r"\n\s*\n\s*\n+", "\n\n", cleaned)
+    return cleaned.strip()
+
+
+def generate_text(
+    context: str,
+    style: str | None,
+    angle_id: str | None = None,
+    exclude_angle_ids: list[str] | None = None,
+) -> tuple[str, str]:
+    """
+    Generate a biography text.
+
+    Args:
+        context:            Wikipedia facts for this person.
+        style:              Optional writing style from ChromaDB.
+        angle_id:           Force a specific angle (for tests/retry).
+        exclude_angle_ids:  Angles already tried — will not repeat.
+
+    Returns:
+        (generated_text, angle_id_used)
+    """
     if not DEEPSEEK_KEY:
         raise RuntimeError("Chybí DEEPSEEK_KEY v .env")
 
-    system_prompt = (
-        "НАПИШИ НОВЫЙ, ДЛИННЫЙ И СТРУКТУРИРОВАННЫЙ БИОГРАФИЧЕСКИЙ ТЕКСТ НА РУССКОМ.\n\n"
-        "ОБЯЗАТЕЛЬНЫЕ ПРАВИЛА:\n"
-        "1) НИКОГДА НЕ КОПИРОВАТЬ ТЕКСТ ИЗ ВИКИПЕДИИ.\n"
-        "2) ДЛИНА: 400–700 СЛОВ, НЕ МЕНЬШЕ.\n"
-        "3) ПИСАТЬ ХУДОЖЕСТВЕННЫМ, ЭМОЦИОНАЛЬНЫМ СТИЛЕМ.\n"
-        "4) ИСПОЛЬЗОВАТЬ ФАКТЫ ИЗ КОНТЕКСТА, НО ПЕРЕФОРМУЛИРОВАТЬ ИХ ПОЛНОСТЬЮ.\n"
-        "5) ТЕКСТ НЕ ДОЛЖЕН БЫТЬ КОРОТКИМ ИЛИ СОКРАЩЕННЫМ.\n"
-        "6) ФОРМАТ: ТОЛЬКО ПЛЕЙН-ТЕКСТ. НЕ ИСПОЛЬЗОВАТЬ Markdown.\n"
-        "7) ЗАПРЕЩЕНО: символы '#', '##', '***', '---', нумерованные списки, разметка.\n"
-        "8) КАЖДЫЙ РАЗДЕЛ НАЧИНАЙ С ЗАГОЛОВКА В ОДНОЙ СТРОКЕ:\n"
-        "   ЭМОДЗИ + пробел + название раздела (без символов разметки).\n"
-        "9) МЕЖДУ АБЗАЦАМИ ОБЯЗАТЕЛЬНО ПУСТАЯ СТРОКА.\n"
-        "10) ДОБАВЛЯЙ ЭМОДЗИ В ЗАГОЛОВКАХ И ВНУТРИ ТЕКСТА, УМЕРЕННО И К МЕСТУ.\n"
-        "11) ЭМОДЗИ ДОЛЖНЫ СООТВЕТСТВОВАТЬ СМЫСЛУ РАЗДЕЛА, НЕ СЛУЧАЙНЫЕ.\n"
-        "12) НЕ ИСПОЛЬЗОВАТЬ НЕУМЕСТНЫЕ ЭМОДЗИ (НАПРИМЕР, ДЕТСКИЕ ИЛИ ИГРУШЕЧНЫЕ\n"
-        "    В НЕСООТВЕТСТВУЮЩЕМ КОНТЕКСТЕ).\n"
-        "13) НЕ ПОВТОРЯЙ ИМЯ И ГОДЫ ЖИЗНИ ПОСЛЕ ПЕРВЫХ ДВУХ СТРОК.\n\n"
-        "СТРОГИЙ ШАБЛОН ВЫВОДА (СОБЛЮДАТЬ ТОЧНО):\n"
-        "Линия 1: Имя (из контекста).\n"
-        "Линия 2: Годы жизни в формате 'ГГГГ — ГГГГ' (если неизвестно, оставь пустой).\n"
-        "Пустая строка.\n"
-        "ЗАГОЛОВОК-ИНТРО с эмодзи + 1-2 абзаца интро.\n"
-        "Пустая строка.\n"
-        "ЗАГОЛОВОК о детстве с эмодзи + 1-2 абзаца.\n"
-        "Пустая строка.\n"
-        "ЗАГОЛОВОК о поддержке семьи/пути к мечте с эмодзи + 1-2 абзаца.\n"
-        "Пустая строка.\n"
-        "ЗАГОЛОВОК о карьере с эмодзи + 2-3 абзаца.\n"
-        "После абзацев 3-4 короткие строки-акцента, каждая начинается с эмодзи.\n"
-        "Пустая строка.\n"
-        "ЗАГОЛОВОК о стиле/мастерстве с эмодзи + 1 абзац.\n"
-        "Пустая строка.\n"
-        "ЗАГОЛОВОК о характере/ценностях с эмодзи + 1-2 абзаца.\n"
-        "Пустая строка.\n"
-        "ЗАГОЛОВОК о наследии/памяти с эмодзи + 1-2 абзаца.\n"
-        "Пустая строка.\n"
-        "Две финальные строки: эмодзи + фраза памяти, эмодзи + фраза благодарности.\n\n"
-        "ПРИМЕР ФОРМАТА СЕКЦИЙ (ТОЛЬКО СТРУКТУРА, НЕ КОПИРОВАТЬ ТЕКСТ):\n"
-        "⚡ Заголовок интро\n"
-        "Абзац интро 1...\n"
-        "\n"
-        "🧒 Заголовок детство\n"
-        "Абзац детство...\n"
-        "\n"
-        "🤝 Заголовок поддержка\n"
-        "Абзац поддержка...\n"
-        "\n"
-        "🏒 Заголовок карьера\n"
-        "Абзац карьера...\n"
-        "Абзац карьера...\n"
-        "Абзац карьера...\n"
-        "🥇 Короткий акцент\n"
-        "🌍 Короткий акцент\n"
-        "🤝 Короткий акцент\n"
-        "\n"
-        "🎭 Заголовок стиль\n"
-        "Абзац стиль...\n"
-        "\n"
-        "❤️ Заголовок характер\n"
-        "Абзац характер...\n"
-        "\n"
-        "🕯️ Заголовок наследие\n"
-        "Абзац наследие...\n"
-        "\n"
-        "🌹 Фраза памяти\n"
-        "🕊️ Фраза благодарности\n\n"
+    angle = pick_angle(exclude_ids=exclude_angle_ids) if angle_id is None else next(
+        (a for a in __import__("app.services.prompt_service", fromlist=["ANGLES"]).ANGLES if a["id"] == angle_id),
+        pick_angle(exclude_ids=exclude_angle_ids),
     )
 
-    if style:
-        system_prompt += (
-            "СТИЛЕВОЙ ОРИЕНТИР (НЕ КОПИРОВАТЬ ФАКТЫ, НО ПОВТОРЯТЬ ТОН, РИТМ И ФОРМАТ):\n"
-            + style[:2500]
-            + "\n\n"
-        )
+    system_prompt = build_system_prompt(angle, style)
+    user_message = build_user_message(context, angle)
+
+    payload = {
+        "model": "deepseek-chat",
+        "max_tokens": 2000,
+        "temperature": 0.9,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user",   "content": user_message},
+        ],
+    }
 
     headers = {
         "Content-Type": "application/json",
         "Authorization": f"Bearer {DEEPSEEK_KEY}",
     }
 
-    payload = {
-        "model": "deepseek-chat",
-        "max_tokens": 2000,
-        "temperature": 0.75,
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {
-                "role": "user",
-                "content": (
-                    "Напиши развернутую биографию в художественном стиле.\n"
-                    "Текст должен быть многоабзацным и строго следовать структуре из системного промпта.\n"
-                    "Опирайся на эти факты, но перепиши их полностью своими словами:\n\n"
-                    + context
-                ),
-            },
-        ],
-    }
-
     try:
         response = requests.post(DEEPSEEK_URL, json=payload, headers=headers, timeout=90)
         response.raise_for_status()
-    except Exception as exc:
+    except Exception:
         logger.exception("DeepSeek request failed")
-        raise exc
+        raise
 
-    data = response.json()
-    raw = data.get("choices", [{}])[0].get("message", {}).get("content", "")
-    if not raw:
-        return raw
-
-    cleaned = raw.replace("***", "").replace("##", "").replace("#", "")
-    cleaned = re.sub(r"-{3,}", "", cleaned)
-    cleaned = re.sub(r"_{3,}", "", cleaned)
-    cleaned = re.sub(r"\n\s*\n\s*\n+", "\n\n", cleaned)
-    return cleaned.strip()
+    raw = response.json().get("choices", [{}])[0].get("message", {}).get("content", "")
+    return _clean(raw), angle["id"]

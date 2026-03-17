@@ -10,6 +10,7 @@ from app.services.cache_service import get_biography, set_biography, delete_biog
 from app.services.chroma_service import get_style_context
 from app.db.chroma_client import upsert_style
 from app.services.deepseek_service import generate_text
+from app.services.uniqueness_service import is_unique_enough
 from app.services.vkorny_export import send_profile
 from app.services.wiki_service import fetch_person_from_wikipedia, fetch_person_images, convert_to_webp
 from app.db.photos_repo import get_photos_by_person
@@ -108,20 +109,39 @@ def generate(
         raise HTTPException(status_code=404, detail="Person not found on Wikipedia")
 
     style = get_style_context(style_name)
+    wiki_source = person.get("summary_text", "")
     context = (
-        "FAKTA Z WIKIPEDIE:\n"
         f"Имя: {person.get('name')}\n"
         f"Годы жизни: {person.get('birth')}–{person.get('death')}\n"
-        f"Краткое описание: {person.get('summary_text')}\n"
+        f"Краткое описание: {wiki_source}\n"
     )
 
-    text = generate_text(context, style)
-    if _is_text_too_short(text):
-        retry_context = context + "\nВАЖНО: НЕ МЕНЕЕ 400 СЛОВ И НЕ МЕНЕЕ 5 АБЗАЦЕВ."
-        text = generate_text(retry_context, style)
+    # Generate with uniqueness check — up to 3 attempts with different angles
+    MAX_ATTEMPTS = 3
+    text = ""
+    tried_angles: list[str] = []
+
+    for attempt in range(MAX_ATTEMPTS):
+        candidate, angle_used = generate_text(context, style, exclude_angle_ids=tried_angles)
+        tried_angles.append(angle_used)
+
+        if _is_text_too_short(candidate):
+            logger.warning("Attempt %d: text too short, retrying", attempt + 1)
+            continue
+
+        if is_unique_enough(candidate, wiki_source):
+            text = candidate
+            logger.info("Accepted text on attempt %d (angle=%s)", attempt + 1, angle_used)
+            break
+
+        logger.warning("Attempt %d: text too similar to Wikipedia (angle=%s), retrying", attempt + 1, angle_used)
+
+    if not text:
+        # Last resort — use last candidate even if similarity is high
+        text = candidate if candidate else ""
 
     if _is_text_too_short(text):
-        logger.error("Generated text too short", extra={"name": person_name})
+        logger.error("All attempts produced short text for %s", person_name)
         raise HTTPException(status_code=500, detail="Generated text is too short")
 
     downloaded = fetch_person_images(person.get("name") or person_name)
