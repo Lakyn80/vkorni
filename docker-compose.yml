@@ -1,0 +1,57 @@
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    volumes:
+      - ./backend/static/photos:/app/static/photos
+      - ./backend/static/accepted_images:/app/static/accepted_images
+      - ./backend/static/rejected_images:/app/static/rejected_images
+      - ./backend/frames:/app/frames
+    ports:
+      - "8020:8000"
+    depends_on:
+      - redis
+    env_file:
+      - .env
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
+
+  worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    command: rq worker images --url ${REDIS_URL}
+    volumes:
+      - ./backend/static/photos:/app/static/photos
+      - ./backend/static/accepted_images:/app/static/accepted_images
+      - ./backend/static/rejected_images:/app/static/rejected_images
+      - ./backend/frames:/app/frames
+    depends_on:
+      - redis
+    env_file:
+      - .env
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_API_BASE: ${NEXT_PUBLIC_API_BASE}
+    environment:
+      - NEXT_PUBLIC_API_BASE=${NEXT_PUBLIC_API_BASE}
+    ports:
+      - "3014:3000"
+    depends_on:
+      - backend
+
+  redis:
+    image: redis:7-alpine
+    container_name: vkorni-redis
+    ports:
+      - "6382:6379"
