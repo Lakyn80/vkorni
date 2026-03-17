@@ -1,0 +1,10 @@
+.env
+*.db
+__pycache__/
+*.pyc
+.DS_Store
+node_modules/
+.next/
+backend/static/photos/
+backend/static/accepted_images/
+backend/static/rejected_images/
