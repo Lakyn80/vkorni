@@ -147,7 +147,8 @@ def process_biography(batch_id: str, name: str, style_name: str | None = None) -
             "photo_sources": photo_sources,
             "finished_at": time.time(),
         }
-        update_job(batch_id, name, **result)
+        update_job(batch_id, name, status="done", birth=birth, death=death,
+                   photos=photos, photo_sources=photo_sources, finished_at=result["finished_at"])
         logger.info("[batch:%s] Done '%s'", batch_id, name)
         return result
 
