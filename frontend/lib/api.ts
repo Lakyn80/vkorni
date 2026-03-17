@@ -65,6 +65,28 @@ export const api = {
     );
   },
 
+  createBatch(names: string[], styleName?: string) {
+    return request<{ batch_id: string; total: number; status: string }>(
+      `${API_BASE}/api/batch`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ names, style_name: styleName ?? null }),
+      }
+    );
+  },
+
+  getBatch(batchId: string) {
+    return request<import("@/types").BatchStatus>(`${API_BASE}/api/batch/${batchId}`);
+  },
+
+  retryBatch(batchId: string) {
+    return request<{ batch_id: string; retried: number }>(
+      `${API_BASE}/api/batch/${batchId}/retry`,
+      { method: "POST" }
+    );
+  },
+
   uploadPhoto(name: string, file: File) {
     const form = new FormData();
     form.append("file", file);

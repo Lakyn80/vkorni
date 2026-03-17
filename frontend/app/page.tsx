@@ -3,20 +3,30 @@
 import { useState } from "react";
 import { useCacheList } from "@/hooks/useCacheList";
 import { useProfiles } from "@/hooks/useProfiles";
+import { useBatch } from "@/hooks/useBatch";
 import { GenerateForm } from "@/components/GenerateForm";
 import { CacheList } from "@/components/CacheList";
 import { ProfileCard } from "@/components/ProfileCard";
+import { BatchPanel } from "@/components/BatchPanel";
 
 export default function Page() {
   const [input, setInput] = useState("");
 
   const { names, loading: cacheLoading, error: cacheError, refresh, addName, deleteName, deleteAll } = useCacheList();
-  const { profiles, busy, loadingCached, generate, loadCached, regenerate, exportProfile, uploadPhoto, selectPhoto } = useProfiles(addName);
+  const { profiles, busy: profileBusy, loadingCached, generate, loadCached, regenerate, exportProfile, uploadPhoto, selectPhoto } = useProfiles(addName);
+  const { batch, busy: batchBusy, startBatch, retryFailed, clearBatch } = useBatch(refresh);
 
-  function handleGenerate() {
-    const name = input.split(/[,\n]+/)[0].trim();
-    if (name) generate(name);
+  function handleSubmit(names: string[]) {
+    if (names.length === 1) {
+      generate(names[0]);
+    } else {
+      startBatch(names);
+    }
+    setInput("");
   }
+
+  const busy = profileBusy || batchBusy;
+  const showBatch = batch !== null;
 
   return (
     <div className="min-h-screen">
@@ -44,7 +54,7 @@ export default function Page() {
                 Создать профиль
               </h1>
               <p className="mt-1 text-sm text-ink/50">
-                Введите имя на русском языке
+                Одно имя или список — по одному на строке
               </p>
             </div>
 
@@ -52,7 +62,7 @@ export default function Page() {
               input={input}
               busy={busy}
               onChange={setInput}
-              onSubmit={handleGenerate}
+              onSubmit={handleSubmit}
             />
 
             <CacheList
@@ -68,7 +78,14 @@ export default function Page() {
 
           {/* RIGHT — result */}
           <section>
-            {profiles.length === 0 ? (
+            {showBatch ? (
+              <BatchPanel
+                batch={batch!}
+                busy={batchBusy}
+                onRetry={retryFailed}
+                onClose={clearBatch}
+              />
+            ) : profiles.length === 0 ? (
               <div className="flex h-full min-h-[400px] flex-col items-center justify-center rounded-3xl border border-dashed border-ink/15 bg-white/40 text-center">
                 <div className="text-4xl mb-4">🕯️</div>
                 <p className="text-base font-medium text-ink/40">Профиль появится здесь</p>
