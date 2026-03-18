@@ -1,7 +1,8 @@
 import os
+import re
 import logging
 from typing import Iterable
-from urllib.parse import unquote, urlencode
+from urllib.parse import unquote, urlencode, urlparse
 
 import requests
 
@@ -13,6 +14,30 @@ VKORNI_NODE_ID  = os.getenv("VKORNI_NODE_ID", "")
 VKORNI_USER_ID  = os.getenv("VKORNI_USER_ID", "1")
 
 STATIC_PHOTOS_DIR = os.getenv("PHOTOS_DIR", "/app/static/photos")
+
+
+def _wikimedia_thumb(url: str, width: int = 400) -> str:
+    """
+    Return a Wikimedia thumbnail URL at the given pixel width.
+
+    Handles two cases:
+      1. Already a thumb URL (.../thumb/.../NNNpx-file) → replace NNN with width
+      2. Direct file URL (.../commons/X/XX/file.ext) → construct thumb URL
+    """
+    # Case 1: has /NNNpx- → just replace the size
+    resized = re.sub(r"/\d+px-", f"/{width}px-", url)
+    if resized != url:
+        return resized
+
+    # Case 2: direct Wikimedia file URL → build thumb URL
+    parsed = urlparse(url)
+    m = re.match(r"(/wikipedia/\w+/)([0-9a-f]/[0-9a-f]{2}/)(.*)", parsed.path)
+    if m:
+        prefix, hash_path, filename = m.groups()
+        thumb_path = f"{prefix}thumb/{hash_path}{filename}/{width}px-{filename}"
+        return f"{parsed.scheme}://{parsed.netloc}{thumb_path}"
+
+    return url  # fallback: return as-is
 
 
 def _headers() -> dict:
@@ -69,11 +94,9 @@ def _build_message(
 ) -> str:
     parts = []
 
-    # Inline photo — prefer [IMG] with original Wikimedia URL, centered
-    # Wikimedia supports serving any pixel width via the /thumb/ URL pattern
+    # Inline photo — always 400px via Wikimedia thumbnail URL
     if photo_source_url:
-        import re as _re
-        small_url = _re.sub(r"/\d+px-", "/400px-", photo_source_url)
+        small_url = _wikimedia_thumb(photo_source_url, width=400)
         parts.append(f"[CENTER][IMG]{small_url}[/IMG][/CENTER]")
     else:
         for aid in attachment_ids[:1]:
