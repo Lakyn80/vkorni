@@ -1,34 +1,95 @@
-import unittest
+"""
+Smoke-tests: verify all API routes return expected HTTP status codes.
+Business logic is tested in dedicated test_api_*.py files.
+"""
 from unittest.mock import patch
 from fastapi.testclient import TestClient
 
 from app.main import app
 
+client = TestClient(app)
 
-class RoutesTests(unittest.TestCase):
-    def setUp(self):
-        self.client = TestClient(app)
-
-    @patch("app.api.routes.get_biography", return_value={"name": "A", "text": "T", "photos": []})
-    def test_generate_uses_cache(self, get_bio_mock):
-        response = self.client.post("/api/generate?name=A")
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json()["text"], "T")
-        get_bio_mock.assert_called_once()
-
-    @patch("app.api.routes.fetch_person_from_wikipedia", return_value={"name": "A", "summary_text": "S", "birth": "1900", "death": "2000", "images": []})
-    @patch("app.api.routes.get_style_context", return_value="STYLE")
-    @patch("app.api.routes.generate_text", return_value="Long text here" * 50)
-    @patch("app.api.routes.fetch_person_images")
-    @patch("app.api.routes.get_photos_by_person", return_value=[])
-    @patch("app.api.routes.set_biography")
-    def test_generate_new(self, set_bio_mock, get_photos_mock, fetch_images_mock, gen_text_mock, style_mock, wiki_mock):
-        response = self.client.post("/api/generate?name=A&FORCE_REGENERATE=true")
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json()["name"], "A")
-        self.assertTrue(gen_text_mock.called)
-        set_bio_mock.assert_called_once()
+LONG_TEXT = "Биографический текст о человеке. " * 50
 
 
-if __name__ == "__main__":
-    unittest.main()
+# ── biography ──────────────────────────────────────────────────────────────────
+
+@patch("app.api.biography.get_biography", return_value={"name": "Яшин", "text": "T", "photos": []})
+def test_smoke_generate_cached(mock_get):
+    assert client.post("/api/generate?name=Яшин").status_code == 200
+
+
+@patch("app.api.biography.list_biographies", return_value=[])
+def test_smoke_cache_list(mock_list):
+    assert client.get("/api/cache").status_code == 200
+
+
+@patch("app.api.biography.get_biography", return_value=None)
+def test_smoke_cache_get_missing(mock_get):
+    assert client.get("/api/cache/НетТакого").status_code == 404
+
+
+@patch("app.api.biography.delete_cached", return_value=True)
+def test_smoke_cache_delete(mock_del):
+    assert client.delete("/api/cache/Яшин").status_code == 200
+
+
+@patch("app.api.biography.delete_all_biographies", return_value=0)
+def test_smoke_cache_delete_all(mock_del):
+    assert client.delete("/api/cache").status_code == 200
+
+
+@patch("app.api.biography.fetch_person_from_wikipedia", return_value=None)
+def test_smoke_wiki_not_found(mock_wiki):
+    assert client.get("/api/wiki/НесуществующийЧеловек").status_code == 404
+
+
+# ── export ─────────────────────────────────────────────────────────────────────
+
+@patch("app.api.export.send_profile", return_value={"status": "OK"})
+def test_smoke_export(mock_send):
+    assert client.post("/api/export", json={"name": "Яшин", "text": "Био"}).status_code == 200
+
+
+def test_smoke_export_missing_body():
+    assert client.post("/api/export", json={}).status_code == 422
+
+
+# ── batch ──────────────────────────────────────────────────────────────────────
+
+@patch("app.api.batch._create_batch", return_value="id1")
+@patch("app.api.batch.enqueue_job")
+def test_smoke_batch_create(mock_enqueue, mock_create):
+    assert client.post("/api/batch", json={"names": ["Яшин"]}).status_code == 200
+
+
+@patch("app.api.batch.get_batch_status", return_value=None)
+def test_smoke_batch_get_missing(mock_status):
+    assert client.get("/api/batch/nonexistent").status_code == 404
+
+
+# ── images ─────────────────────────────────────────────────────────────────────
+
+@patch("app.api.images.set_status")
+@patch("app.api.images.enqueue_job")
+def test_smoke_image_job(mock_enqueue, mock_status):
+    assert client.post("/api/image-job?name=Яшин").status_code == 200
+
+
+@patch("app.api.images.get_status", return_value={"status": "queued"})
+def test_smoke_poll_image_job(mock_get):
+    assert client.get("/api/image-job/abc").status_code == 200
+
+
+# ── styles ─────────────────────────────────────────────────────────────────────
+
+@patch("app.api.styles.upsert_style")
+def test_smoke_style_upsert(mock_upsert):
+    assert client.post("/api/style", json={
+        "name": "Торжественный",
+        "text": "Этот стиль написания используется для официальных биографий известных людей России." * 2,
+    }).status_code == 200
+
+
+def test_smoke_style_too_short():
+    assert client.post("/api/style", json={"name": "X", "text": "кратко"}).status_code == 400
