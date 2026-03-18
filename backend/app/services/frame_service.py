@@ -1,183 +1,250 @@
+"""
+frame_service.py
+----------------
+Standalone module — applies decorative memorial frames to portrait images.
+
+10 fully programmatic styles (pure Pillow — no external PNG templates needed).
+Fonts downloaded into /app/frames/fonts/ by Dockerfile at build time.
+
+Geometry (px):
+    PHOTO_SIZE  512 × 512   (same as center_face_in_image output)
+    BORDER       50          left / right / top padding
+    PLATE_H      90          date plate at the bottom
+    ──────────────────
+    OUTPUT       612 × 652   total canvas
+
+Usage:
+    from app.services.frame_service import compose_portrait
+    out = compose_portrait("/app/static/photos/name/photo.webp",
+                           birth="25 апреля 1946", death="6 апреля 2022")
+"""
+
 import logging
 import os
 import random
-import uuid
+from pathlib import Path
 from typing import Optional
 
-from PIL import Image, ImageDraw, ImageFilter, ImageFont
+from PIL import Image, ImageDraw, ImageFont
 
 from app.config import settings
 
 logger = logging.getLogger(__name__)
 
-# ---------------------------------------------------------------------------
-# Profession → frame template mapping
-# Frames 1–3: decorative   (artists)
-# Frames 4–6: classic      (politicians)
-# Frames 7–8: minimal      (scientists)
-# Frames 9–10: modern      (athletes)
-# ---------------------------------------------------------------------------
-PROFESSION_FRAME_MAP: dict[str, list[int]] = {
-    "artist":     [1, 2, 3],
-    "painter":    [1, 2, 3],
-    "musician":   [1, 2, 3],
-    "writer":     [1, 2, 3],
-    "actor":      [1, 2, 3],
-    "politician": [4, 5, 6],
-    "statesman":  [4, 5, 6],
-    "president":  [4, 5, 6],
-    "scientist":  [7, 8],
-    "physicist":  [7, 8],
-    "chemist":    [7, 8],
-    "biologist":  [7, 8],
-    "mathematician": [7, 8],
-    "athlete":    [9, 10],
-    "footballer": [9, 10],
-    "boxer":      [9, 10],
-    "swimmer":    [9, 10],
-}
+# ─── Geometry ─────────────────────────────────────────────────────────────────
+PHOTO_SIZE = 512
+BORDER     = 50
+PLATE_H    = 90
+OUTPUT_W   = PHOTO_SIZE + BORDER * 2        # 612
+OUTPUT_H   = PHOTO_SIZE + BORDER + PLATE_H  # 652
 
-# Canvas dimensions
-CANVAS_W = 800
-CANVAS_H = 1000
-PLATE_H  = 120        # bottom date plate height
-FRAME_BORDER = 30     # inner portrait padding from frame edge
+FONTS_DIR = os.path.join(settings.frames_dir, "fonts")
+
+# ─── Fallback system fonts ────────────────────────────────────────────────────
+_FALLBACK_FONTS = [
+    "/usr/share/fonts/truetype/liberation/LiberationSerif-Regular.ttf",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSerif.ttf",
+    "/usr/share/fonts/truetype/freefont/FreeSerif.ttf",
+]
+
+# ─── 10 frame styles ──────────────────────────────────────────────────────────
+# bg           canvas background (RGB)
+# outer        outer border stroke color
+# inner        inner border stroke color (thinner, tight around photo)
+# plate_bg     date plate fill
+# text_color   date text color
+# font_file    TTF filename in FONTS_DIR
+# bw           outer border stroke width (px)
+# deco         True → add Art Deco extra hairline + side ticks
+
+STYLES: list[dict] = [
+    # 0 — Black marble + gold
+    {"bg": (18, 18, 18), "outer": (165, 132, 58), "inner": (80, 64, 28),
+     "plate_bg": (25, 25, 25), "text_color": (205, 168, 78),
+     "font_file": "Cinzel-Regular.ttf", "bw": 6},
+
+    # 1 — Dark wood + cream
+    {"bg": (58, 34, 14), "outer": (212, 188, 142), "inner": (118, 88, 48),
+     "plate_bg": (48, 26, 9), "text_color": (222, 196, 148),
+     "font_file": "LibreBaskerville-Regular.ttf", "bw": 8},
+
+    # 2 — Silver museum
+    {"bg": (228, 228, 230), "outer": (158, 158, 165), "inner": (200, 200, 205),
+     "plate_bg": (215, 215, 218), "text_color": (55, 55, 68),
+     "font_file": "EBGaramond-Regular.ttf", "bw": 5},
+
+    # 3 — Gold ornate
+    {"bg": (28, 18, 6), "outer": (212, 172, 68), "inner": (148, 118, 42),
+     "plate_bg": (20, 13, 4), "text_color": (222, 185, 88),
+     "font_file": "PlayfairDisplay-Regular.ttf", "bw": 10},
+
+    # 4 — Sepia vintage
+    {"bg": (92, 72, 48), "outer": (182, 155, 108), "inner": (128, 102, 68),
+     "plate_bg": (78, 58, 36), "text_color": (232, 206, 158),
+     "font_file": "Cormorant-Regular.ttf", "bw": 7},
+
+    # 5 — Stone monument
+    {"bg": (88, 88, 90), "outer": (202, 202, 202), "inner": (138, 138, 140),
+     "plate_bg": (72, 72, 74), "text_color": (232, 228, 224),
+     "font_file": "CrimsonText-Regular.ttf", "bw": 6},
+
+    # 6 — Art Deco
+    {"bg": (14, 11, 7), "outer": (196, 158, 64), "inner": (98, 78, 28),
+     "plate_bg": (11, 8, 4), "text_color": (196, 158, 64),
+     "font_file": "JosefinSlab-Regular.ttf", "bw": 4, "deco": True},
+
+    # 7 — Victorian
+    {"bg": (44, 14, 14), "outer": (178, 138, 88), "inner": (28, 8, 8),
+     "plate_bg": (36, 8, 8), "text_color": (202, 165, 98),
+     "font_file": "Spectral-Regular.ttf", "bw": 9},
+
+    # 8 — Orthodox / Byzantine
+    {"bg": (14, 24, 58), "outer": (196, 158, 64), "inner": (98, 78, 28),
+     "plate_bg": (9, 16, 48), "text_color": (212, 175, 78),
+     "font_file": "Cardo-Regular.ttf", "bw": 7},
+
+    # 9 — White gallery
+    {"bg": (248, 246, 242), "outer": (178, 152, 88), "inner": (212, 196, 158),
+     "plate_bg": (240, 238, 234), "text_color": (78, 58, 28),
+     "font_file": "IMFellEnglish-Regular.ttf", "bw": 3},
+]
 
 
-def _pick_frame(profession: Optional[str]) -> int:
-    if profession:
-        key = profession.lower().strip()
-        candidates = PROFESSION_FRAME_MAP.get(key)
-        if candidates:
-            return random.choice(candidates)
-    return random.randint(1, 10)
+# ─── Helpers ──────────────────────────────────────────────────────────────────
 
-
-def _frame_template_path(frame_id: int) -> str:
-    return os.path.join(settings.frames_dir, "templates", f"{frame_id}.png")
-
-
-def _font_path(font_id: int) -> str:
-    return os.path.join(settings.frames_dir, "fonts", f"{font_id}.ttf")
-
-
-def _load_font(font_id: int, size: int) -> ImageFont.FreeTypeFont:
-    path = _font_path(font_id)
+def _load_font(font_file: str, size: int) -> ImageFont.FreeTypeFont:
+    path = os.path.join(FONTS_DIR, font_file)
     if os.path.exists(path):
         try:
             return ImageFont.truetype(path, size)
         except Exception:
-            logger.warning("Failed to load font %s, falling back to default", path)
+            logger.warning("Cannot load font %s", path)
+    for fb in _FALLBACK_FONTS:
+        if os.path.exists(fb):
+            try:
+                return ImageFont.truetype(fb, size)
+            except Exception:
+                pass
     return ImageFont.load_default()
 
 
-def _draw_shadow_text(
-    draw: ImageDraw.ImageDraw,
-    text: str,
-    position: tuple[int, int],
-    font: ImageFont.FreeTypeFont,
-    text_color: tuple[int, int, int] = (255, 255, 255),
-    shadow_color: tuple[int, int, int] = (0, 0, 0),
-    shadow_offset: int = 2,
-) -> None:
-    x, y = position
-    draw.text((x + shadow_offset, y + shadow_offset), text, font=font, fill=shadow_color)
-    draw.text((x, y), text, font=font, fill=text_color)
+def _diamond(draw: ImageDraw.Draw, cx: int, cy: int, r: int, color: tuple) -> None:
+    """Small diamond ornament — used as corner decoration."""
+    draw.polygon([(cx, cy - r), (cx + r, cy), (cx, cy + r), (cx - r, cy)], fill=color)
 
+
+# ─── Public API ───────────────────────────────────────────────────────────────
 
 def compose_portrait(
     source_path: str,
     birth: Optional[str],
     death: Optional[str],
-    profession: Optional[str] = None,
-    person_name: Optional[str] = None,
+    frame_id: Optional[int] = None,
+    profession: Optional[str] = None,   # kept for API compatibility, unused
+    person_name: Optional[str] = None,  # kept for API compatibility, unused
 ) -> str:
     """
-    Compose a framed portrait image.
+    Apply a memorial frame overlay to source_path.
 
-    Steps:
-      1. Open source image, resize to fit portrait area
-      2. Paste frame overlay (RGBA) if available
-      3. Draw bottom plate with birth–death dates
-      4. Apply text shadow effect
-      5. Save to accepted_dir and return the file path
+    Always returns a path — on any error returns source_path unchanged so
+    callers never crash.
+
+    Args:
+        source_path : Local path to the photo (any Pillow-supported format).
+        birth       : Birth date string, e.g. "25 апреля 1946".
+        death       : Death date string, e.g. "6 апреля 2022".
+        frame_id    : 0–9 to pin a style; None = random each call.
 
     Returns:
-        Absolute path to the composed output image.
+        Absolute path to the composed JPEG in accepted_images/.
     """
-    frame_id = _pick_frame(profession)
-    font_id  = random.randint(1, 10)
+    try:
+        return _compose(source_path, birth, death, frame_id)
+    except Exception:
+        logger.exception("frame_service: composition failed for %s — returning original", source_path)
+        return source_path
 
+
+def _compose(
+    source_path: str,
+    birth: Optional[str],
+    death: Optional[str],
+    frame_id: Optional[int],
+) -> str:
+    if frame_id is None:
+        frame_id = random.randint(0, len(STYLES) - 1)
+
+    s  = STYLES[frame_id % len(STYLES)]
+    bw = s["bw"]
+
+    # ── 1. Load & resize source ───────────────────────────────────────────────
+    with Image.open(source_path) as src:
+        src = src.convert("RGB")
+        src = src.resize((PHOTO_SIZE, PHOTO_SIZE), Image.LANCZOS)
+
+    # ── 2. Canvas ─────────────────────────────────────────────────────────────
+    canvas = Image.new("RGB", (OUTPUT_W, OUTPUT_H), s["bg"])
+    draw   = ImageDraw.Draw(canvas)
+
+    px, py = BORDER, BORDER          # photo top-left corner
+    canvas.paste(src, (px, py))
+
+    # ── 3. Outer thick border ─────────────────────────────────────────────────
+    pad_out = bw * 2
+    r_out = [px - pad_out, py - pad_out,
+             px + PHOTO_SIZE + pad_out - 1, py + PHOTO_SIZE + pad_out - 1]
+    draw.rectangle(r_out, outline=s["outer"], width=bw)
+
+    # ── 4. Inner thin border (tight around photo) ─────────────────────────────
+    thin = max(1, bw // 2)
+    pad_in = thin * 2
+    r_in = [px - pad_in, py - pad_in,
+            px + PHOTO_SIZE + pad_in - 1, py + PHOTO_SIZE + pad_in - 1]
+    draw.rectangle(r_in, outline=s["inner"], width=thin)
+
+    # ── 5. Corner diamond ornaments ───────────────────────────────────────────
+    cr = max(7, bw + 3)
+    for cx, cy in [(r_out[0], r_out[1]), (r_out[2], r_out[1]),
+                   (r_out[0], r_out[3]), (r_out[2], r_out[3])]:
+        _diamond(draw, cx, cy, cr, s["outer"])
+
+    # ── 6. Art Deco extra hairline + side ticks ───────────────────────────────
+    if s.get("deco"):
+        gap = 14
+        r_d = [r_out[0] - gap, r_out[1] - gap,
+               r_out[2] + gap, r_out[3] + gap]
+        draw.rectangle(r_d, outline=s["outer"], width=1)
+        mid_y = (r_d[1] + r_d[3]) // 2
+        for side_x in (r_d[0], r_d[2]):
+            draw.line([(side_x, mid_y - 8), (side_x, mid_y + 8)],
+                      fill=s["outer"], width=2)
+
+    # ── 7. Date plate ─────────────────────────────────────────────────────────
+    plate_top    = py + PHOTO_SIZE + bw * 3 + 6
+    plate_left   = BORDER
+    plate_right  = OUTPUT_W - BORDER
+    plate_bottom = OUTPUT_H - 12
+
+    draw.rounded_rectangle(
+        [plate_left, plate_top, plate_right, plate_bottom],
+        radius=8, fill=s["plate_bg"], outline=s["outer"], width=thin,
+    )
+
+    if birth or death:
+        b = birth or "??"
+        d = death or "н.в."
+        date_text = f"{b}  —  {d}"
+        font = _load_font(s["font_file"], 24)
+        bb   = draw.textbbox((0, 0), date_text, font=font)
+        tw, th = bb[2] - bb[0], bb[3] - bb[1]
+        tx = plate_left + (plate_right - plate_left - tw) // 2
+        ty = plate_top  + (plate_bottom - plate_top  - th) // 2 - bb[1]
+        draw.text((tx, ty), date_text, font=font, fill=s["text_color"])
+
+    # ── 8. Save ───────────────────────────────────────────────────────────────
     os.makedirs(settings.accepted_dir, exist_ok=True)
-
-    # --- 1. Open and resize source portrait ---
-    source = Image.open(source_path).convert("RGBA")
-    portrait_h = CANVAS_H - PLATE_H
-    portrait_area = (CANVAS_W - FRAME_BORDER * 2, portrait_h - FRAME_BORDER * 2)
-    source.thumbnail(portrait_area, Image.LANCZOS)
-
-    # Create canvas
-    canvas = Image.new("RGBA", (CANVAS_W, CANVAS_H), (20, 20, 20, 255))
-
-    # Center portrait on canvas (above plate)
-    px = (CANVAS_W - source.width) // 2
-    py = FRAME_BORDER + (portrait_h - FRAME_BORDER * 2 - source.height) // 2
-    canvas.paste(source, (px, py), source)
-
-    # --- 2. Overlay frame template if it exists ---
-    frame_path = _frame_template_path(frame_id)
-    if os.path.exists(frame_path):
-        try:
-            frame_img = Image.open(frame_path).convert("RGBA").resize(
-                (CANVAS_W, CANVAS_H), Image.LANCZOS
-            )
-            canvas.alpha_composite(frame_img)
-        except Exception:
-            logger.warning("Could not apply frame template %s", frame_path)
-
-    # --- 3. Draw bottom plate ---
-    plate_top = CANVAS_H - PLATE_H
-    draw = ImageDraw.Draw(canvas)
-    draw.rectangle([(0, plate_top), (CANVAS_W, CANVAS_H)], fill=(10, 10, 10, 220))
-
-    # Separator line
-    draw.line([(20, plate_top + 4), (CANVAS_W - 20, plate_top + 4)], fill=(180, 150, 100, 255), width=2)
-
-    # --- 4. Render dates ---
-    font_large  = _load_font(font_id, 42)
-    font_small  = _load_font(font_id, 22)
-
-    date_str = ""
-    if birth and death:
-        date_str = f"{birth} – {death}"
-    elif birth:
-        date_str = f"{birth} – ?"
-    elif death:
-        date_str = f"? – {death}"
-
-    if date_str:
-        bbox = draw.textbbox((0, 0), date_str, font=font_large)
-        text_w = bbox[2] - bbox[0]
-        text_x = (CANVAS_W - text_w) // 2
-        text_y = plate_top + 20
-        _draw_shadow_text(draw, date_str, (text_x, text_y), font_large,
-                          text_color=(220, 195, 140), shadow_color=(0, 0, 0))
-
-    if person_name:
-        bbox = draw.textbbox((0, 0), person_name, font=font_small)
-        name_w = bbox[2] - bbox[0]
-        name_x = (CANVAS_W - name_w) // 2
-        name_y = plate_top + 72
-        _draw_shadow_text(draw, person_name, (name_x, name_y), font_small,
-                          text_color=(180, 180, 180), shadow_color=(0, 0, 0))
-
-    # --- 5. Apply subtle emboss glow on frame border ---
-    embossed = canvas.filter(ImageFilter.SMOOTH_MORE)
-    canvas = Image.blend(canvas, embossed, alpha=0.15)
-
-    # --- 6. Save output ---
-    out_name = f"{uuid.uuid4().hex}.jpg"
-    out_path = os.path.join(settings.accepted_dir, out_name)
-    canvas.convert("RGB").save(out_path, "JPEG", quality=90)
-    logger.info("Composed portrait saved: %s (frame=%d, font=%d)", out_path, frame_id, font_id)
+    stem     = Path(source_path).stem
+    out_path = os.path.join(settings.accepted_dir, f"{stem}_frame{frame_id}.jpg")
+    canvas.save(out_path, "JPEG", quality=88, optimize=True)
+    logger.info("Frame #%d applied → %s", frame_id, out_path)
     return out_path

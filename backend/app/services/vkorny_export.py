@@ -8,10 +8,11 @@ import requests
 
 logger = logging.getLogger(__name__)
 
-VKORNI_BASE_URL = os.getenv("VKORNI_BASE_URL", "https://vkorni.com/api")
-VKORNI_API_KEY  = os.getenv("VKORNI_API_KEY", "")
-VKORNI_NODE_ID  = os.getenv("VKORNI_NODE_ID", "")
-VKORNI_USER_ID  = os.getenv("VKORNI_USER_ID", "1")
+VKORNI_BASE_URL   = os.getenv("VKORNI_BASE_URL", "https://vkorni.com/api")
+VKORNI_API_KEY    = os.getenv("VKORNI_API_KEY", "")
+VKORNI_NODE_ID    = os.getenv("VKORNI_NODE_ID", "")
+VKORNI_USER_ID    = os.getenv("VKORNI_USER_ID", "1")
+BACKEND_PUBLIC_URL = os.getenv("BACKEND_PUBLIC_URL", "").rstrip("/")
 
 STATIC_PHOTOS_DIR = os.getenv("PHOTOS_DIR", "/app/static/photos")
 
@@ -143,19 +144,43 @@ def send_profile(
 
     photo_list = list(photos) if photos else []
     attachment_ids: list[int] = []
+    effective_photo_url: str | None = None
 
-    if not photo_source_url:
-        # Fall back to uploading local file as attachment
-        for photo_url in photo_list[:1]:
-            local = _local_path(photo_url)
-            if os.path.exists(local):
-                aid = _upload_attachment(local)
-                if aid:
-                    attachment_ids.append(aid)
-            else:
-                logger.warning("Photo file not found: %s (resolved: %s)", photo_url, local)
+    # ── Apply memorial frame ──────────────────────────────────────────────────
+    # Find the first available local photo and frame it.
+    framed_path: str | None = None
+    for photo_url in photo_list[:1]:
+        local = _local_path(photo_url)
+        if os.path.exists(local):
+            try:
+                from app.services.frame_service import compose_portrait
+                framed_path = compose_portrait(local, birth=birth, death=death)
+                logger.info("Framed image: %s", framed_path)
+            except Exception:
+                logger.exception("Frame composition failed — using original photo")
+                framed_path = local
+            break
+        logger.warning("Photo file not found: %s (resolved: %s)", photo_url, local)
 
-    message = _build_message(text, attachment_ids, birth=birth, death=death, photo_source_url=photo_source_url)
+    # ── Determine how to send the photo ──────────────────────────────────────
+    # Priority:
+    #   1. Framed image via BACKEND_PUBLIC_URL  →  [IMG]our_server/path[/IMG]
+    #   2. Original Wikimedia URL               →  [IMG]wikimedia_400px[/IMG]
+    #   3. Upload framed/original as attachment →  [ATTACH=full]
+    if framed_path and BACKEND_PUBLIC_URL:
+        rel = os.path.relpath(framed_path, "/app").replace("\\", "/")
+        effective_photo_url = f"{BACKEND_PUBLIC_URL}/{rel}"
+        logger.info("Serving framed image via public URL: %s", effective_photo_url)
+    elif photo_source_url:
+        effective_photo_url = photo_source_url   # Wikimedia URL (400px via _wikimedia_thumb)
+    elif framed_path:
+        # No public URL — upload as XenForo attachment (may show as link)
+        aid = _upload_attachment(framed_path)
+        if aid:
+            attachment_ids.append(aid)
+
+    message = _build_message(text, attachment_ids, birth=birth, death=death,
+                             photo_source_url=effective_photo_url)
 
     payload = {
         "node_id":        int(VKORNI_NODE_ID),

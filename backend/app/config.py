@@ -25,5 +25,9 @@ class Settings:
     # Frame assets (relative to backend root)
     frames_dir: str       = os.getenv("FRAMES_DIR", "/app/frames")
 
+    # Public URL of this backend — used to serve framed images inline in XenForo.
+    # Must be reachable by vkorni.com (set to VPS IP/domain when deployed).
+    backend_public_url: str = os.getenv("BACKEND_PUBLIC_URL", "").rstrip("/")
+
 
 settings = Settings()
