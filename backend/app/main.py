@@ -1,9 +1,14 @@
+import os
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-import os
 
-from app.api.routes import router
+from app.api.biography import router as biography_router
+from app.api.export import router as export_router
+from app.api.batch import router as batch_router
+from app.api.images import router as images_router
+from app.api.styles import router as styles_router
 
 app = FastAPI(title="VKorni API")
 
@@ -15,16 +20,19 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-static_dir = os.getenv("PHOTOS_DIR", "/app/static/photos")
-os.makedirs(static_dir, exist_ok=True)
-app.mount("/static/photos", StaticFiles(directory=static_dir), name="photos")
+# ── Static file mounts ────────────────────────────────────────────────────────
+for env_var, mount_path, name in [
+    ("PHOTOS_DIR",         "/static/photos",          "photos"),
+    ("IMAGE_ACCEPTED_DIR", "/static/accepted_images", "accepted_images"),
+    ("IMAGE_REJECTED_DIR", "/static/rejected_images", "rejected_images"),
+]:
+    directory = os.getenv(env_var, f"/app/static/{name}")
+    os.makedirs(directory, exist_ok=True)
+    app.mount(mount_path, StaticFiles(directory=directory), name=name)
 
-accepted_dir = os.getenv("IMAGE_ACCEPTED_DIR", "/app/static/accepted_images")
-os.makedirs(accepted_dir, exist_ok=True)
-app.mount("/static/accepted_images", StaticFiles(directory=accepted_dir), name="accepted_images")
-
-rejected_dir = os.getenv("IMAGE_REJECTED_DIR", "/app/static/rejected_images")
-os.makedirs(rejected_dir, exist_ok=True)
-app.mount("/static/rejected_images", StaticFiles(directory=rejected_dir), name="rejected_images")
-
-app.include_router(router)
+# ── Routers ───────────────────────────────────────────────────────────────────
+app.include_router(biography_router)
+app.include_router(export_router)
+app.include_router(batch_router)
+app.include_router(images_router)
+app.include_router(styles_router)
