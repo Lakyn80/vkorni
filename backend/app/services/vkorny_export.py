@@ -164,17 +164,21 @@ def send_profile(
 
     # ── Determine how to send the photo ──────────────────────────────────────
     # Priority:
-    #   1. Framed image via BACKEND_PUBLIC_URL  →  [IMG]our_server/path[/IMG]
-    #   2. Original Wikimedia URL               →  [IMG]wikimedia_400px[/IMG]
-    #   3. Upload framed/original as attachment →  [ATTACH=full]
-    if framed_path and BACKEND_PUBLIC_URL:
+    #   1. Framed image via public BACKEND_PUBLIC_URL (not localhost)
+    #   2. Original Wikimedia URL  →  [IMG]wikimedia_400px[/IMG]  ← always works
+    #   3. Upload framed/original as XenForo attachment (fallback)
+    _public = BACKEND_PUBLIC_URL
+    _is_public = bool(_public) and "localhost" not in _public and "127.0.0.1" not in _public
+
+    if framed_path and _is_public:
         rel = os.path.relpath(framed_path, "/app").replace("\\", "/")
-        effective_photo_url = f"{BACKEND_PUBLIC_URL}/{rel}"
+        effective_photo_url = f"{_public}/{rel}"
         logger.info("Serving framed image via public URL: %s", effective_photo_url)
     elif photo_source_url:
-        effective_photo_url = photo_source_url   # Wikimedia URL (400px via _wikimedia_thumb)
+        # Wikimedia URL — always reachable by vkorni.com
+        effective_photo_url = photo_source_url
     elif framed_path:
-        # No public URL — upload as XenForo attachment (may show as link)
+        # No public URL and no Wikimedia URL — upload to XenForo as attachment
         aid = _upload_attachment(framed_path)
         if aid:
             attachment_ids.append(aid)
