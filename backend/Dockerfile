@@ -18,7 +18,8 @@ RUN pip install --no-cache-dir \
     opencv-python-headless \
     sqlalchemy \
     "python-jose[cryptography]" \
-    "passlib[bcrypt]"
+    "passlib[bcrypt]" \
+    "bcrypt==4.0.1"
 
 # ── System fallback fonts ─────────────────────────────────────────────────────
 # Google Fonts TTFs are in ./backend/frames/fonts/ (mounted as volume at runtime)
