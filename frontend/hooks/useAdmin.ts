@@ -30,21 +30,6 @@ export function useAdmin() {
     }
   }, []);
 
-  const setup = useCallback(async (username: string, password: string) => {
-    setBusy(true);
-    setError("");
-    try {
-      await api.adminSetup(username, password);
-      // Auto-login after setup
-      const data = await api.adminLogin(username, password);
-      localStorage.setItem(TOKEN_KEY, data.access_token);
-      setToken(data.access_token);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Chyba nastavení");
-    } finally {
-      setBusy(false);
-    }
-  }, []);
 
   const changePassword = useCallback(
     async (currentPassword: string, newPassword: string) => {
@@ -77,7 +62,6 @@ export function useAdmin() {
     busy,
     error,
     login,
-    setup,
     changePassword,
     logout,
   };
