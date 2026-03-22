@@ -1,0 +1,46 @@
+services:
+  backend:
+    image: ghcr.io/lakyn80/vkorni-backend:latest
+    volumes:
+      - ./static/photos:/app/static/photos
+      - ./static/accepted_images:/app/static/accepted_images
+      - ./static/rejected_images:/app/static/rejected_images
+      - ./frames:/app/frames
+    ports:
+      - "8020:8000"
+    depends_on:
+      - redis
+    env_file:
+      - .env
+    restart: unless-stopped
+
+  worker:
+    image: ghcr.io/lakyn80/vkorni-backend:latest
+    command: rq worker bios images --url ${REDIS_URL}
+    volumes:
+      - ./static/photos:/app/static/photos
+      - ./static/accepted_images:/app/static/accepted_images
+      - ./static/rejected_images:/app/static/rejected_images
+      - ./frames:/app/frames
+    depends_on:
+      - redis
+    env_file:
+      - .env
+    restart: always
+    deploy:
+      replicas: 2
+
+  frontend:
+    image: ghcr.io/lakyn80/vkorni-frontend:latest
+    ports:
+      - "3014:3000"
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: vkorni-redis
+    ports:
+      - "6382:6379"
+    restart: unless-stopped
