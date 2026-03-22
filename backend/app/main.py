@@ -4,11 +4,15 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
+from app.db.sqlalchemy_db import init_db
 from app.api.biography import router as biography_router
 from app.api.export import router as export_router
 from app.api.batch import router as batch_router
 from app.api.images import router as images_router
 from app.api.styles import router as styles_router
+from app.api.admin import router as admin_router
+
+init_db()
 
 app = FastAPI(title="VKorni API")
 
@@ -36,3 +40,4 @@ app.include_router(export_router)
 app.include_router(batch_router)
 app.include_router(images_router)
 app.include_router(styles_router)
+app.include_router(admin_router)

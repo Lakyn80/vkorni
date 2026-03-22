@@ -31,4 +31,5 @@ export type Profile = {
   error?: string;
   exportState?: ExportState;
   exportMessage?: string;
+  framedPhotoUrl?: string | null;
 };

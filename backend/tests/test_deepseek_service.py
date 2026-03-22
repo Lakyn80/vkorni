@@ -17,8 +17,9 @@ class DeepseekServiceTests(unittest.TestCase):
     @patch("app.services.deepseek_service.requests.post", return_value=DummyResponse())
     def test_generate_text(self, post_mock):
         os.environ["DEEPSEEK_KEY"] = "test"
-        result = generate_text("context", "style")
-        self.assertEqual(result, "Generated")
+        text, angle_id = generate_text("context", "style")
+        self.assertEqual(text, "Generated")
+        self.assertIsInstance(angle_id, str)
         self.assertTrue(post_mock.called)
 
 

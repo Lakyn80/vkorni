@@ -15,13 +15,15 @@ RUN pip install --no-cache-dir \
     pillow-heif \
     rq \
     tenacity \
-    opencv-python-headless
+    opencv-python-headless \
+    sqlalchemy \
+    "python-jose[cryptography]" \
+    "passlib[bcrypt]"
 
-# ── System fonts (fallback if TTF loading fails) ──────────────────────────────
-# Google Fonts TTFs are bundled in frames/fonts/ and copied via COPY . /app
+# ── System fallback fonts ─────────────────────────────────────────────────────
+# Google Fonts TTFs are in ./backend/frames/fonts/ (mounted as volume at runtime)
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        fonts-liberation \
-        fonts-freefont-ttf \
+        fonts-liberation fonts-freefont-ttf \
     && rm -rf /var/lib/apt/lists/*
 
 ENV PYTHONPATH=/app

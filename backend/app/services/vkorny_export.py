@@ -48,8 +48,14 @@ def _headers() -> dict:
     }
 
 
-def _upload_attachment(file_path: str) -> int | None:
-    """Upload a local image file to XenForo. Returns attachment_id or None."""
+def _upload_attachment(file_path: str) -> dict | None:
+    """Upload a local image file to XenForo.
+
+    Returns a dict with keys ``attachment_id`` and ``view_url`` on success,
+    or *None* on failure.  ``view_url`` is the direct CDN URL of the uploaded
+    image so we can embed it with ``[IMG]url[/IMG]`` instead of the inline
+    ``[ATTACH=full]`` tag which renders as a link rather than an image.
+    """
     base = VKORNI_BASE_URL.rstrip("/")
     try:
         r = requests.post(
@@ -66,20 +72,26 @@ def _upload_attachment(file_path: str) -> int | None:
             return None
 
         filename = os.path.basename(file_path)
+        # Detect MIME type from extension; frame_service saves as .jpg
+        mime = "image/jpeg" if file_path.lower().endswith((".jpg", ".jpeg")) else "image/webp"
         with open(file_path, "rb") as f:
             r2 = requests.post(
                 f"{base}/attachments/",
                 params={"key": key},
-                files={"attachment": (filename, f, "image/webp")},
+                files={"attachment": (filename, f, mime)},
                 headers=_headers(),
                 timeout=30,
             )
         if not r2.ok:
             logger.error("XenForo attachment upload failed: %s %s", r2.status_code, r2.text[:200])
             return None
-        aid = r2.json().get("attachment", {}).get("attachment_id")
-        logger.info("Uploaded attachment id=%s for %s", aid, filename)
-        return aid
+
+        att = r2.json().get("attachment", {})
+        aid = att.get("attachment_id")
+        # XenForo returns a direct URL in attachment.direct_url (or thumbnail_url)
+        view_url = att.get("direct_url") or att.get("thumbnail_url") or ""
+        logger.info("Uploaded attachment id=%s url=%s for %s", aid, view_url, filename)
+        return {"attachment_id": aid, "view_url": view_url}
 
     except Exception:
         logger.exception("XenForo attachment upload error")
@@ -95,9 +107,11 @@ def _build_message(
 ) -> str:
     parts = []
 
-    # Inline photo — always 400px via Wikimedia thumbnail URL
+    # Inline photo — use [IMG] tag with the URL as-is (already a CDN/Wikimedia URL)
+    # Only apply Wikimedia thumbnail normalization for actual Wikimedia URLs.
     if photo_source_url:
-        small_url = _wikimedia_thumb(photo_source_url, width=400)
+        is_wikimedia = "wikipedia.org" in photo_source_url or "wikimedia.org" in photo_source_url
+        small_url = _wikimedia_thumb(photo_source_url, width=400) if is_wikimedia else photo_source_url
         parts.append(f"[CENTER][IMG]{small_url}[/IMG][/CENTER]")
     else:
         for aid in attachment_ids[:1]:
@@ -147,41 +161,49 @@ def send_profile(
     effective_photo_url: str | None = None
 
     # ── Apply memorial frame ──────────────────────────────────────────────────
-    # Find the first available local photo and frame it.
+    # If the photo is already a framed image (from /static/accepted_images/),
+    # use it directly — no need to re-frame.
     framed_path: str | None = None
     for photo_url in photo_list[:1]:
         local = _local_path(photo_url)
         if os.path.exists(local):
-            try:
-                from app.services.frame_service import compose_portrait
-                framed_path = compose_portrait(local, birth=birth, death=death)
-                logger.info("Framed image: %s", framed_path)
-            except Exception:
-                logger.exception("Frame composition failed — using original photo")
+            if "accepted_images" in photo_url:
+                # Already framed by /api/frame — use as-is
                 framed_path = local
+                logger.warning("Using pre-framed image: %s", framed_path)
+            else:
+                try:
+                    from app.services.frame_service import compose_portrait
+                    framed_path = compose_portrait(local, birth=birth, death=death)
+                    logger.warning("Framed image: %s", framed_path)
+                except Exception:
+                    logger.exception("Frame composition failed — using original photo")
+                    framed_path = local
             break
         logger.warning("Photo file not found: %s (resolved: %s)", photo_url, local)
 
     # ── Determine how to send the photo ──────────────────────────────────────
     # Priority:
-    #   1. Framed image via public BACKEND_PUBLIC_URL (not localhost)
-    #   2. Original Wikimedia URL  →  [IMG]wikimedia_400px[/IMG]  ← always works
-    #   3. Upload framed/original as XenForo attachment (fallback)
-    _public = BACKEND_PUBLIC_URL
-    _is_public = bool(_public) and "localhost" not in _public and "127.0.0.1" not in _public
-
-    if framed_path and _is_public:
-        rel = os.path.relpath(framed_path, "/app").replace("\\", "/")
-        effective_photo_url = f"{_public}/{rel}"
-        logger.info("Serving framed image via public URL: %s", effective_photo_url)
+    #   1. Upload framed image to XenForo → use returned direct_url in [IMG]
+    #      (works from localhost; XenForo hosts the file on their CDN)
+    #   2. Wikimedia URL as [IMG] fallback (no frame, but always reachable)
+    if framed_path:
+        logger.warning("Uploading framed image to XenForo: %s", framed_path)
+        upload = _upload_attachment(framed_path)
+        logger.warning("XenForo upload result: %s", upload)
+        if upload:
+            attachment_ids.append(upload["attachment_id"])
+            if upload["view_url"]:
+                effective_photo_url = upload["view_url"]
+                logger.warning("Using XenForo CDN URL: %s", effective_photo_url)
+            # If view_url is empty the [ATTACH=full] tag will be used as fallback
+        else:
+            # Upload failed — fall back to Wikimedia thumbnail
+            logger.warning("Upload failed, falling back to Wikimedia URL")
+            effective_photo_url = photo_source_url
     elif photo_source_url:
-        # Wikimedia URL — always reachable by vkorni.com
+        # No framed image — use Wikimedia URL directly
         effective_photo_url = photo_source_url
-    elif framed_path:
-        # No public URL and no Wikimedia URL — upload to XenForo as attachment
-        aid = _upload_attachment(framed_path)
-        if aid:
-            attachment_ids.append(aid)
 
     message = _build_message(text, attachment_ids, birth=birth, death=death,
                              photo_source_url=effective_photo_url)

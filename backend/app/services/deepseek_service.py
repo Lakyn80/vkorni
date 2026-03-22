@@ -5,7 +5,6 @@ import logging
 
 from app.services.prompt_service import pick_angle, build_system_prompt, build_user_message
 
-DEEPSEEK_KEY = os.getenv("DEEPSEEK_KEY")
 DEEPSEEK_URL = "https://api.deepseek.com/chat/completions"
 
 logger = logging.getLogger(__name__)
@@ -38,6 +37,7 @@ def generate_text(
     Returns:
         (generated_text, angle_id_used)
     """
+    DEEPSEEK_KEY = os.getenv("DEEPSEEK_KEY")
     if not DEEPSEEK_KEY:
         raise RuntimeError("Chybí DEEPSEEK_KEY v .env")
 
@@ -60,7 +60,7 @@ def generate_text(
     }
 
     headers = {
-        "Content-Type": "application/json",
+        "Content-Type":  "application/json",
         "Authorization": f"Bearer {DEEPSEEK_KEY}",
     }
 

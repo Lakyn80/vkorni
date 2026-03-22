@@ -45,9 +45,22 @@ export const api = {
     );
   },
 
-  export(profile: Pick<Profile, "name" | "text" | "photos" | "photoSources" | "selectedPhoto" | "birth" | "death">) {
+  frame(photoUrl: string, birth: string | null, death: string | null) {
+    return request<{ url: string }>(
+      `${API_BASE}/api/frame`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ photo_url: photoUrl, birth, death }),
+      }
+    );
+  },
+
+  export(profile: Pick<Profile, "name" | "text" | "photos" | "photoSources" | "selectedPhoto" | "birth" | "death" | "framedPhotoUrl">) {
+    // Use the pre-generated framed image if available, otherwise fall back to original photo
+    const framedPhoto = profile.framedPhotoUrl || null;
     const photo = profile.selectedPhoto || profile.photos[0] || null;
-    const photoSourceUrl = photo && profile.photoSources ? (profile.photoSources[photo] ?? null) : null;
+    const photoSourceUrl = !framedPhoto && photo && profile.photoSources ? (profile.photoSources[photo] ?? null) : null;
     return request<{ status: string; error?: string; url?: string }>(
       `${API_BASE}/api/export`,
       {
@@ -56,7 +69,7 @@ export const api = {
         body: JSON.stringify({
           name: profile.name,
           text: profile.text,
-          photos: photo ? [photo] : [],
+          photos: framedPhoto ? [framedPhoto] : (photo ? [photo] : []),
           birth: profile.birth ?? null,
           death: profile.death ?? null,
           photo_source_url: photoSourceUrl,
@@ -93,6 +106,33 @@ export const api = {
     return request<{ url: string }>(
       `${API_BASE}/api/upload?name=${encodeURIComponent(name)}`,
       { method: "POST", body: form }
+    );
+  },
+
+  // ── Admin ─────────────────────────────────────────────────────────────────
+
+  adminLogin(username: string, password: string) {
+    return request<{ access_token: string; token_type: string }>(
+      `${API_BASE}/api/admin/login`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username, password }),
+      }
+    );
+  },
+
+  adminChangePassword(token: string, currentPassword: string, newPassword: string) {
+    return request<{ status: string }>(
+      `${API_BASE}/api/admin/change-password`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ current_password: currentPassword, new_password: newPassword }),
+      }
     );
   },
 };

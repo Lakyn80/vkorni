@@ -18,6 +18,7 @@ def fake_get(url, headers=None, params=None, timeout=None):
             "title": "Test Person",
             "extract": "Summary text",
             "content_urls": {"desktop": {"page": "http://wiki"}},
+            "originalimage": {"source": "http://example.com/Test.jpg"},
         })
     if "action=query&prop=pageprops" in url:
         return DummyResponse({

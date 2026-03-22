@@ -21,6 +21,22 @@ export function useProfiles(onNameResolved: (name: string) => void) {
     setProfiles((prev) => prev.map((p) => (p.id === id ? { ...p, ...patch } : p)));
   }, []);
 
+  // Generate memorial frame in background after profile loads
+  const applyFrame = useCallback(
+    async (profileId: string, photo: string, birth: string | null, death: string | null) => {
+      if (!photo) return;
+      try {
+        const result = await api.frame(photo, birth, death);
+        if (result.url) {
+          updateProfile(profileId, { framedPhotoUrl: result.url });
+        }
+      } catch {
+        // Frame generation is best-effort — silently ignore errors
+      }
+    },
+    [updateProfile]
+  );
+
   const generate = useCallback(
     async (name: string, force = false) => {
       if (!name.trim()) return;
@@ -31,22 +47,24 @@ export function useProfiles(onNameResolved: (name: string) => void) {
       try {
         const data = await api.generate(name, force);
         const photos = Array.isArray(data.photos) ? data.photos : [];
-        setProfiles([
-          {
-            id: draft.id,
-            name: data.name || name,
-            text: data.text || "",
-            photos,
-            photoSources: data.photo_sources ?? {},
-            selectedPhoto: photos[0] || "",
-            birth: data.birth ?? null,
-            death: data.death ?? null,
-            loading: false,
-            error: "",
-            exportState: "idle",
-          },
-        ]);
+        const profile: Profile = {
+          id: draft.id,
+          name: data.name || name,
+          text: data.text || "",
+          photos,
+          photoSources: data.photo_sources ?? {},
+          selectedPhoto: photos[0] || "",
+          birth: data.birth ?? null,
+          death: data.death ?? null,
+          loading: false,
+          error: "",
+          exportState: "idle",
+          framedPhotoUrl: null,
+        };
+        setProfiles([profile]);
         onNameResolved(data.name || name);
+        // Generate frame in background
+        if (photos[0]) applyFrame(draft.id, photos[0], data.birth ?? null, data.death ?? null);
       } catch (err) {
         setProfiles([
           {
@@ -59,7 +77,7 @@ export function useProfiles(onNameResolved: (name: string) => void) {
         setBusy(false);
       }
     },
-    [onNameResolved]
+    [onNameResolved, applyFrame]
   );
 
   const loadCached = useCallback(async (name: string) => {
@@ -71,21 +89,23 @@ export function useProfiles(onNameResolved: (name: string) => void) {
     try {
       const data = await api.getCachedProfile(name);
       const photos = Array.isArray(data.photos) ? data.photos : [];
-      setProfiles([
-        {
-          id: draft.id,
-          name: data.name || name,
-          text: data.text || "",
-          photos,
-          photoSources: data.photo_sources ?? {},
-          selectedPhoto: photos[0] || "",
-          birth: data.birth ?? null,
-          death: data.death ?? null,
-          loading: false,
-          error: "",
-          exportState: "idle",
-        },
-      ]);
+      const profile: Profile = {
+        id: draft.id,
+        name: data.name || name,
+        text: data.text || "",
+        photos,
+        photoSources: data.photo_sources ?? {},
+        selectedPhoto: photos[0] || "",
+        birth: data.birth ?? null,
+        death: data.death ?? null,
+        loading: false,
+        error: "",
+        exportState: "idle",
+        framedPhotoUrl: null,
+      };
+      setProfiles([profile]);
+      // Generate frame in background
+      if (photos[0]) applyFrame(draft.id, photos[0], data.birth ?? null, data.death ?? null);
     } catch (err) {
       setProfiles([
         {
@@ -97,7 +117,7 @@ export function useProfiles(onNameResolved: (name: string) => void) {
     } finally {
       setLoadingCached(false);
     }
-  }, []);
+  }, [applyFrame]);
 
   const regenerate = useCallback(
     async (profile: Profile) => {

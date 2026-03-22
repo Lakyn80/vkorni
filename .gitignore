@@ -1,10 +1,40 @@
+# Environment
 .env
-*.db
+.env.*
+
+# Python
 __pycache__/
+**/__pycache__/
 *.pyc
-.DS_Store
+*.pyo
+*.pyd
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+backend/.venv/
+backend/venv/
+
+# Database
+*.db
+*.sqlite3
+
+# Node / Next.js
 node_modules/
 .next/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Static uploads (runtime data)
 backend/static/photos/
 backend/static/accepted_images/
 backend/static/rejected_images/
+
+# Logs
+*.log
+npm-debug.log*
+
+# IDE
+.vscode/
+.idea/

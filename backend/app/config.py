@@ -29,5 +29,10 @@ class Settings:
     # Must be reachable by vkorni.com (set to VPS IP/domain when deployed).
     backend_public_url: str = os.getenv("BACKEND_PUBLIC_URL", "").rstrip("/")
 
+    # Admin auth
+    jwt_secret: str  = os.getenv("JWT_SECRET", "change-me-in-production")
+    jwt_algorithm: str = "HS256"
+    jwt_expire_minutes: int = int(os.getenv("JWT_EXPIRE_MINUTES", "60"))
+
 
 settings = Settings()
