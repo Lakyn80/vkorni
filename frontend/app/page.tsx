@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useRouter } from "next/navigation";
 import { useCacheList } from "@/hooks/useCacheList";
 import { useProfiles } from "@/hooks/useProfiles";
 import { useBatch } from "@/hooks/useBatch";
@@ -9,7 +10,13 @@ import { CacheList } from "@/components/CacheList";
 import { ProfileCard } from "@/components/ProfileCard";
 import { BatchPanel } from "@/components/BatchPanel";
 
+function logout(router: ReturnType<typeof useRouter>) {
+  document.cookie = "vkorni_token=; path=/; max-age=0";
+  router.push("/admin/login");
+}
+
 export default function Page() {
+  const router = useRouter();
   const [input, setInput] = useState("");
 
   const { names, loading: cacheLoading, error: cacheError, refresh, addName, deleteName, deleteAll } = useCacheList();
@@ -38,9 +45,17 @@ export default function Page() {
             <span className="h-4 w-px bg-ink/15" />
             <span className="text-sm font-medium text-ink/70">Генератор биографий</span>
           </div>
-          <span className="rounded-full bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-600">
-            ● Online
-          </span>
+          <div className="flex items-center gap-4">
+            <span className="rounded-full bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-600">
+              ● Online
+            </span>
+            <button
+              onClick={() => logout(router)}
+              className="text-xs text-ink/40 hover:text-red-500 transition-colors"
+            >
+              Выйти
+            </button>
+          </div>
         </div>
       </header>
 
