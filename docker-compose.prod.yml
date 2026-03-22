@@ -6,6 +6,7 @@ services:
       - ./static/accepted_images:/app/static/accepted_images
       - ./static/rejected_images:/app/static/rejected_images
       - ./frames:/app/frames
+      - ./data:/app/app/data
     ports:
       - "8020:8000"
     depends_on:
