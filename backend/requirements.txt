@@ -9,3 +9,7 @@ sqlalchemy
 python-jose[cryptography]
 passlib[bcrypt]
 bcrypt==4.0.1
+opencv-python-headless
+Pillow
+pillow-heif
+chromadb
