@@ -35,7 +35,7 @@ def _get_queue(name: str = "images") -> Queue:
     return _queues[name]
 
 
-def enqueue_job(func: Callable, *args, queue: str = "images", **kwargs) -> str:
+def enqueue_job(func: Callable, *args, queue: str = "images", job_timeout: int = 600, **kwargs) -> str:
     """
     Enqueue a function for background execution.
 
@@ -54,7 +54,7 @@ def enqueue_job(func: Callable, *args, queue: str = "images", **kwargs) -> str:
         func,
         *args,
         **kwargs,
-        job_timeout=600,
+        job_timeout=job_timeout,
         result_ttl=3600,
         failure_ttl=3600,
         retry=Retry(max=settings.worker_max_retries, interval=settings.worker_retry_delay),
