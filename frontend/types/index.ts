@@ -1,5 +1,24 @@
 export type ExportState = "idle" | "sending" | "ok" | "error";
 
+export type BulkExportJobStatus = "pending" | "running" | "done" | "failed";
+
+export type BulkExportJob = {
+  name: string;
+  status: BulkExportJobStatus;
+  url?: string | null;
+  error?: string | null;
+};
+
+export type BulkExportStatus = {
+  id: string;
+  total: number;
+  done: number;
+  failed: number;
+  running: number;
+  pending: number;
+  results: BulkExportJob[];
+};
+
 export type BatchJobStatus = "queued" | "running" | "done" | "failed" | "retrying";
 
 export type BatchJob = {

@@ -143,6 +143,19 @@ def _local_path(rel_url: str) -> str:
     return os.path.join("/app", sub)
 
 
+def _extract_birth_from_text(text: str) -> str | None:
+    """Extract birth year from biography text as last-resort fallback."""
+    if not text:
+        return None
+    # Match patterns like "родился 12 апреля 1946" or standalone year 1800-1999
+    m = re.search(r"родил[сь][яь][^.]{0,40}?(1[89]\d{2}|20[01]\d)", text)
+    if m:
+        return m.group(1)
+    # Fallback: first 4-digit year in range 1800-2024
+    m = re.search(r"\b(1[89]\d{2}|20[01]\d)\b", text)
+    return m.group(1) if m else None
+
+
 def send_profile(
     name: str,
     text: str,
@@ -155,6 +168,10 @@ def send_profile(
         return {"status": "ERROR", "error": "VKORNI_API_KEY is not set"}
     if not VKORNI_NODE_ID:
         return {"status": "ERROR", "error": "VKORNI_NODE_ID is not set"}
+
+    # Use biography text as fallback source for birth date
+    if not birth:
+        birth = _extract_birth_from_text(text)
 
     photo_list = list(photos) if photos else []
     attachment_ids: list[int] = []

@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { useCacheList } from "@/hooks/useCacheList";
 import { useProfiles } from "@/hooks/useProfiles";
 import { useBatch } from "@/hooks/useBatch";
+import { useBulkExport } from "@/hooks/useBulkExport";
 import { GenerateForm } from "@/components/GenerateForm";
 import { CacheList } from "@/components/CacheList";
 import { ProfileCard } from "@/components/ProfileCard";
@@ -22,6 +23,7 @@ export default function Page() {
   const { names, loading: cacheLoading, error: cacheError, refresh, addName, deleteName, deleteAll } = useCacheList();
   const { profiles, busy: profileBusy, loadingCached, generate, loadCached, regenerate, exportProfile, uploadPhoto, selectPhoto } = useProfiles(addName);
   const { batch, busy: batchBusy, startBatch, retryFailed, clearBatch } = useBatch(refresh);
+  const { status: bulkExportStatus, busy: bulkExporting, startExport } = useBulkExport();
 
   function handleSubmit(names: string[]) {
     if (names.length === 1) {
@@ -88,6 +90,9 @@ export default function Page() {
               onRefresh={refresh}
               onDelete={deleteName}
               onDeleteAll={deleteAll}
+              onBulkExport={startExport}
+              bulkExport={bulkExportStatus}
+              bulkExporting={bulkExporting}
             />
           </aside>
 

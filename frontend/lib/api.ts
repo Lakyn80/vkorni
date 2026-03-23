@@ -111,6 +111,21 @@ export const api = {
 
   // ── Admin ─────────────────────────────────────────────────────────────────
 
+  bulkExport(names: string[]) {
+    return request<{ export_id: string; total: number }>(
+      `${API_BASE}/api/bulk-export`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ names }),
+      }
+    );
+  },
+
+  getBulkExport(exportId: string) {
+    return request<import("@/types").BulkExportStatus>(`${API_BASE}/api/bulk-export/${exportId}`);
+  },
+
   adminLogin(username: string, password: string) {
     return request<{ access_token: string; token_type: string }>(
       `${API_BASE}/api/admin/login`,

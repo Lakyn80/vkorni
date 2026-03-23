@@ -18,6 +18,9 @@ from pydantic import BaseModel
 from app.api.deps import validate_name, json_response
 from app.services.vkorny_export import send_profile
 from app.services.wiki_service import convert_to_webp
+from app.services.bulk_export_service import create_bulk_export, get_bulk_export
+from app.workers.export_worker import run_bulk_export
+from app.workers.queue_backend import enqueue_job
 from app.config import settings
 
 logger = logging.getLogger(__name__)
@@ -75,6 +78,27 @@ def export_profile(payload: ExportProfile):
         photo_source_url=payload.photo_source_url,
     )
     return json_response(result)
+
+
+class BulkExportRequest(BaseModel):
+    names: list[str]
+
+
+@router.post("/bulk-export")
+def start_bulk_export(payload: BulkExportRequest):
+    if not payload.names:
+        raise HTTPException(status_code=400, detail="No names provided")
+    export_id = create_bulk_export(payload.names)
+    enqueue_job(run_bulk_export, export_id, queue="bios", job_timeout=3600)
+    return json_response({"export_id": export_id, "total": len(payload.names)})
+
+
+@router.get("/bulk-export/{export_id}")
+def get_bulk_export_status(export_id: str):
+    state = get_bulk_export(export_id)
+    if not state:
+        raise HTTPException(status_code=404, detail="Export not found")
+    return json_response(state)
 
 
 @router.post("/upload")

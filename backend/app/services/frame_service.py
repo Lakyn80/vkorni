@@ -189,37 +189,7 @@ def _compose(
     px, py = BORDER, BORDER          # photo top-left corner
     canvas.paste(src, (px, py))
 
-    # ── 3. Outer thick border ─────────────────────────────────────────────────
-    pad_out = bw * 2
-    r_out = [px - pad_out, py - pad_out,
-             px + PHOTO_SIZE + pad_out - 1, py + PHOTO_SIZE + pad_out - 1]
-    draw.rectangle(r_out, outline=s["outer"], width=bw)
-
-    # ── 4. Inner thin border (tight around photo) ─────────────────────────────
-    thin = max(1, bw // 2)
-    pad_in = thin * 2
-    r_in = [px - pad_in, py - pad_in,
-            px + PHOTO_SIZE + pad_in - 1, py + PHOTO_SIZE + pad_in - 1]
-    draw.rectangle(r_in, outline=s["inner"], width=thin)
-
-    # ── 5. Corner diamond ornaments ───────────────────────────────────────────
-    cr = max(7, bw + 3)
-    for cx, cy in [(r_out[0], r_out[1]), (r_out[2], r_out[1]),
-                   (r_out[0], r_out[3]), (r_out[2], r_out[3])]:
-        _diamond(draw, cx, cy, cr, s["outer"])
-
-    # ── 6. Art Deco extra hairline + side ticks ───────────────────────────────
-    if s.get("deco"):
-        gap = 14
-        r_d = [r_out[0] - gap, r_out[1] - gap,
-               r_out[2] + gap, r_out[3] + gap]
-        draw.rectangle(r_d, outline=s["outer"], width=1)
-        mid_y = (r_d[1] + r_d[3]) // 2
-        for side_x in (r_d[0], r_d[2]):
-            draw.line([(side_x, mid_y - 8), (side_x, mid_y + 8)],
-                      fill=s["outer"], width=2)
-
-    # ── 7. Date plate ─────────────────────────────────────────────────────────
+    # ── 3. Date plate ─────────────────────────────────────────────────────────
     plate_top    = py + PHOTO_SIZE + bw * 3 + 6
     plate_left   = BORDER
     plate_right  = OUTPUT_W - BORDER
