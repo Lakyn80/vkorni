@@ -189,6 +189,8 @@ def _compose(
     px, py = BORDER, BORDER          # photo top-left corner
     canvas.paste(src, (px, py))
 
+    thin = 1  # border width for date plate outline
+
     # ── 3. Date plate ─────────────────────────────────────────────────────────
     plate_top    = py + PHOTO_SIZE + bw * 3 + 6
     plate_left   = BORDER
