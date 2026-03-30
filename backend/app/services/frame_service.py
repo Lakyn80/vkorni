@@ -34,9 +34,8 @@ logger = logging.getLogger(__name__)
 # ─── Geometry ─────────────────────────────────────────────────────────────────
 PHOTO_SIZE = 512
 BORDER     = 50
-PLATE_H    = 90
-OUTPUT_W   = PHOTO_SIZE + BORDER * 2        # 612
-OUTPUT_H   = PHOTO_SIZE + BORDER + PLATE_H  # 652
+OUTPUT_W   = PHOTO_SIZE + BORDER * 2   # 612
+OUTPUT_H   = PHOTO_SIZE + BORDER * 2   # 612
 
 FONTS_DIR = os.path.join(settings.frames_dir, "fonts")
 
@@ -189,31 +188,7 @@ def _compose(
     px, py = BORDER, BORDER          # photo top-left corner
     canvas.paste(src, (px, py))
 
-    thin = 1  # border width for date plate outline
-
-    # ── 3. Date plate ─────────────────────────────────────────────────────────
-    plate_top    = py + PHOTO_SIZE + bw * 3 + 6
-    plate_left   = BORDER
-    plate_right  = OUTPUT_W - BORDER
-    plate_bottom = OUTPUT_H - 12
-
-    draw.rounded_rectangle(
-        [plate_left, plate_top, plate_right, plate_bottom],
-        radius=8, fill=s["plate_bg"], outline=s["outer"], width=thin,
-    )
-
-    if birth or death:
-        b = birth or "??"
-        d = death or "н.в."
-        date_text = f"{b}  —  {d}"
-        font = _load_font(s["font_file"], 24)
-        bb   = draw.textbbox((0, 0), date_text, font=font)
-        tw, th = bb[2] - bb[0], bb[3] - bb[1]
-        tx = plate_left + (plate_right - plate_left - tw) // 2
-        ty = plate_top  + (plate_bottom - plate_top  - th) // 2 - bb[1]
-        draw.text((tx, ty), date_text, font=font, fill=s["text_color"])
-
-    # ── 8. Save ───────────────────────────────────────────────────────────────
+    # ── 3. Save ───────────────────────────────────────────────────────────────
     os.makedirs(settings.accepted_dir, exist_ok=True)
     stem     = Path(source_path).stem
     out_path = os.path.join(settings.accepted_dir, f"{stem}_frame{frame_id}.jpg")
