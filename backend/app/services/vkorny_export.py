@@ -1,61 +1,56 @@
+import logging
 import os
 import re
-import logging
+import tempfile
 from typing import Iterable
-from urllib.parse import unquote, urlencode, urlparse
+from urllib.parse import unquote, urlencode, urljoin, urlparse
 
 import requests
 
+from app.services.cache_service import get_biography
+
 logger = logging.getLogger(__name__)
 
-VKORNI_BASE_URL   = os.getenv("VKORNI_BASE_URL", "https://vkorni.com/api")
-VKORNI_API_KEY    = os.getenv("VKORNI_API_KEY", "")
-VKORNI_NODE_ID    = os.getenv("VKORNI_NODE_ID", "")
-VKORNI_USER_ID    = os.getenv("VKORNI_USER_ID", "1")
-BACKEND_PUBLIC_URL = os.getenv("BACKEND_PUBLIC_URL", "").rstrip("/")
-
-STATIC_PHOTOS_DIR = os.getenv("PHOTOS_DIR", "/app/static/photos")
-
-
-def _wikimedia_thumb(url: str, width: int = 400) -> str:
-    """
-    Return a Wikimedia thumbnail URL at the given pixel width.
-
-    Handles two cases:
-      1. Already a thumb URL (.../thumb/.../NNNpx-file) → replace NNN with width
-      2. Direct file URL (.../commons/X/XX/file.ext) → construct thumb URL
-    """
-    # Case 1: has /NNNpx- → just replace the size
-    resized = re.sub(r"/\d+px-", f"/{width}px-", url)
-    if resized != url:
-        return resized
-
-    # Case 2: direct Wikimedia file URL → build thumb URL
-    parsed = urlparse(url)
-    m = re.match(r"(/wikipedia/\w+/)([0-9a-f]/[0-9a-f]{2}/)(.*)", parsed.path)
-    if m:
-        prefix, hash_path, filename = m.groups()
-        thumb_path = f"{prefix}thumb/{hash_path}{filename}/{width}px-{filename}"
-        return f"{parsed.scheme}://{parsed.netloc}{thumb_path}"
-
-    return url  # fallback: return as-is
+VKORNI_BASE_URL = os.getenv("VKORNI_BASE_URL", "https://vkorni.com/api")
+VKORNI_API_KEY = os.getenv("VKORNI_API_KEY", "")
+VKORNI_NODE_ID = os.getenv("VKORNI_NODE_ID", "")
+VKORNI_USER_ID = os.getenv("VKORNI_USER_ID", "1")
 
 
 def _headers() -> dict:
     return {
-        "XF-Api-Key":  VKORNI_API_KEY,
+        "XF-Api-Key": VKORNI_API_KEY,
         "XF-Api-User": VKORNI_USER_ID,
     }
 
 
-def _upload_attachment(file_path: str) -> dict | None:
-    """Upload a local image file to XenForo.
+def _vkorni_origin() -> str:
+    parsed = urlparse(VKORNI_BASE_URL)
+    if parsed.scheme and parsed.netloc:
+        return f"{parsed.scheme}://{parsed.netloc}"
+    return "https://vkorni.com"
 
-    Returns a dict with keys ``attachment_id`` and ``view_url`` on success,
-    or *None* on failure.  ``view_url`` is the direct CDN URL of the uploaded
-    image so we can embed it with ``[IMG]url[/IMG]`` instead of the inline
-    ``[ATTACH=full]`` tag which renders as a link rather than an image.
-    """
+
+def _is_vkorni_url(url: str) -> bool:
+    if not url:
+        return False
+    parsed = urlparse(url)
+    origin = urlparse(_vkorni_origin())
+    return parsed.netloc == origin.netloc
+
+
+def _absolute_attachment_url(url: str) -> str:
+    if not url:
+        return ""
+    return urljoin(f"{_vkorni_origin()}/", url)
+
+
+def _is_remote_image_url(url: str) -> bool:
+    parsed = urlparse(url)
+    return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
+
+
+def _upload_attachment(file_path: str) -> dict | None:
     base = VKORNI_BASE_URL.rstrip("/")
     try:
         r = requests.post(
@@ -67,12 +62,13 @@ def _upload_attachment(file_path: str) -> dict | None:
         if not r.ok:
             logger.error("XenForo new-key failed: %s %s", r.status_code, r.text[:200])
             return None
+
         key = r.json().get("key")
         if not key:
+            logger.error("XenForo new-key response missing key")
             return None
 
         filename = os.path.basename(file_path)
-        # Detect MIME type from extension; frame_service saves as .jpg
         mime = "image/jpeg" if file_path.lower().endswith((".jpg", ".jpeg")) else "image/webp"
         with open(file_path, "rb") as f:
             r2 = requests.post(
@@ -82,17 +78,25 @@ def _upload_attachment(file_path: str) -> dict | None:
                 headers=_headers(),
                 timeout=30,
             )
+
         if not r2.ok:
             logger.error("XenForo attachment upload failed: %s %s", r2.status_code, r2.text[:200])
             return None
 
         att = r2.json().get("attachment", {})
-        aid = att.get("attachment_id")
-        # XenForo returns a direct URL in attachment.direct_url (or thumbnail_url)
-        view_url = att.get("direct_url") or att.get("thumbnail_url") or ""
-        logger.info("Uploaded attachment id=%s url=%s for %s", aid, view_url, filename)
-        return {"attachment_id": aid, "view_url": view_url}
+        attachment_id = att.get("attachment_id")
+        if not attachment_id:
+            logger.error("XenForo attachment response missing attachment_id")
+            return None
 
+        raw_view_url = att.get("direct_url") or att.get("thumbnail_url") or ""
+        view_url = _absolute_attachment_url(raw_view_url)
+        if view_url and not _is_vkorni_url(view_url):
+            logger.error("Unexpected attachment host returned by XenForo: %s", view_url)
+            view_url = ""
+
+        logger.info("Uploaded attachment id=%s url=%s for %s", attachment_id, view_url, filename)
+        return {"attachment_id": attachment_id, "view_url": view_url}
     except Exception:
         logger.exception("XenForo attachment upload error")
         return None
@@ -103,28 +107,23 @@ def _build_message(
     attachment_ids: list[int],
     birth: str | None = None,
     death: str | None = None,
-    photo_source_url: str | None = None,
+    attachment_url: str | None = None,
 ) -> str:
     parts = []
 
-    # Inline photo — use [IMG] tag with the URL as-is (already a CDN/Wikimedia URL)
-    # Only apply Wikimedia thumbnail normalization for actual Wikimedia URLs.
-    if photo_source_url:
-        is_wikimedia = "wikipedia.org" in photo_source_url or "wikimedia.org" in photo_source_url
-        small_url = _wikimedia_thumb(photo_source_url, width=400) if is_wikimedia else photo_source_url
-        parts.append(f"[CENTER][IMG]{small_url}[/IMG][/CENTER]")
+    if attachment_url:
+        parts.append(f"[CENTER][IMG]{attachment_url}[/IMG][/CENTER]")
     else:
-        for aid in attachment_ids[:1]:
-            parts.append(f"[CENTER][ATTACH=full]{aid}[/ATTACH][/CENTER]")
+        for attachment_id in attachment_ids[:1]:
+            parts.append(f"[CENTER][ATTACH=full]{attachment_id}[/ATTACH][/CENTER]")
 
     if parts:
         parts.append("")
 
-    # Date line with real Wikidata dates (not AI-guessed years)
     if birth or death:
         b = birth or "??"
         d = death or "наши дни"
-        parts.append(f"[B]{b} — {d}[/B]")
+        parts.append(f"[B]{b} - {d}[/B]")
         parts.append("")
 
     for paragraph in text.strip().split("\n\n"):
@@ -137,23 +136,151 @@ def _build_message(
 
 
 def _local_path(rel_url: str) -> str:
-    """Convert /static/photos/... URL to absolute disk path, decoding percent-encoding."""
     decoded = unquote(rel_url)
     sub = decoded.lstrip("/")
     return os.path.join("/app", sub)
 
 
 def _extract_birth_from_text(text: str) -> str | None:
-    """Extract birth year from biography text as last-resort fallback."""
     if not text:
         return None
-    # Match patterns like "родился 12 апреля 1946" or standalone year 1800-1999
     m = re.search(r"родил[сь][яь][^.]{0,40}?(1[89]\d{2}|20[01]\d)", text)
     if m:
         return m.group(1)
-    # Fallback: first 4-digit year in range 1800-2024
     m = re.search(r"\b(1[89]\d{2}|20[01]\d)\b", text)
     return m.group(1) if m else None
+
+
+def _download_source_photo(url: str) -> str | None:
+    try:
+        parsed = urlparse(url)
+        suffix = os.path.splitext(unquote(os.path.basename(parsed.path)))[1] or ".img"
+        fd, path = tempfile.mkstemp(prefix="vkorni-export-", suffix=suffix)
+        os.close(fd)
+
+        response = requests.get(url, timeout=20)
+        response.raise_for_status()
+        with open(path, "wb") as f:
+            f.write(response.content)
+        return path
+    except Exception:
+        logger.exception("Source photo download failed", extra={"url": url})
+        return None
+
+
+def _prepare_export_photo(
+    photos: Iterable[str],
+    birth: str | None,
+    death: str | None,
+    photo_source_url: str | None,
+) -> dict | None:
+    photo_list = list(photos) if photos else []
+    cleanup_paths: list[str] = []
+    source_local_path: str | None = None
+    source_photo_path: str | None = None
+    image_origin: str | None = None
+    resolved_source_url = photo_source_url
+
+    for photo_url in photo_list[:1]:
+        if _is_remote_image_url(photo_url):
+            if not resolved_source_url:
+                resolved_source_url = photo_url
+            continue
+        local = _local_path(photo_url)
+        if os.path.exists(local):
+            source_local_path = local
+            source_photo_path = photo_url
+            image_origin = "accepted_local" if "accepted_images" in photo_url else "photo_local"
+            break
+        logger.warning("Photo file not found: %s (resolved: %s)", photo_url, local)
+
+    if source_local_path is None and resolved_source_url:
+        downloaded = _download_source_photo(resolved_source_url)
+        if downloaded:
+            cleanup_paths.append(downloaded)
+            source_local_path = downloaded
+            image_origin = "photo_source_download"
+
+    if source_local_path is None:
+        return None
+
+    export_path = source_local_path
+    if image_origin != "accepted_local":
+        try:
+            from app.services.frame_service import compose_portrait
+
+            export_path = compose_portrait(source_local_path, birth=birth, death=death)
+            if image_origin == "photo_local":
+                image_origin = "framed_local"
+            elif image_origin == "photo_source_download":
+                image_origin = "framed_source_download"
+        except Exception:
+            logger.exception("Frame composition failed - using original photo")
+            if image_origin == "photo_local":
+                image_origin = "raw_local"
+            elif image_origin == "photo_source_download":
+                image_origin = "raw_source_download"
+
+    return {
+        "export_path": export_path,
+        "cleanup_paths": cleanup_paths,
+        "source_photo_path": source_photo_path,
+        "source_photo_url": resolved_source_url,
+        "image_origin": image_origin,
+    }
+
+
+def _create_thread(name: str, message: str, attachment_ids: list[int]) -> dict:
+    form: dict[str, str] = {
+        "node_id": str(int(VKORNI_NODE_ID)),
+        "title": name,
+        "message": message,
+    }
+    for i, attachment_id in enumerate(attachment_ids):
+        form[f"attachment_ids[{i}]"] = str(attachment_id)
+
+    body_bytes = urlencode(form, encoding="utf-8").encode("utf-8")
+    response = requests.post(
+        f"{VKORNI_BASE_URL.rstrip('/')}/threads/",
+        data=body_bytes,
+        headers={**_headers(), "Content-Type": "application/x-www-form-urlencoded; charset=utf-8"},
+        timeout=30,
+    )
+    if not response.ok:
+        return {
+            "status": "ERROR",
+            "code": response.status_code,
+            "error": response.text[:500],
+        }
+
+    body = response.json()
+    thread_id = body.get("thread", {}).get("thread_id")
+    thread_url = f"{_vkorni_origin()}/threads/{thread_id}/" if thread_id else None
+    return {
+        "status": "OK",
+        "thread_id": thread_id,
+        "url": thread_url,
+    }
+
+
+def _error_result(error: str, **extra) -> dict:
+    payload = {"status": "ERROR", "error": error}
+    payload.update(extra)
+    return payload
+
+
+def _resolve_cached_source_url(name: str, photo_list: list[str], explicit_source_url: str | None) -> str | None:
+    if explicit_source_url or not photo_list:
+        return explicit_source_url
+    try:
+        cached = get_biography(name)
+        if not cached:
+            return None
+        photo_sources = cached.get("photo_sources") or {}
+        return photo_sources.get(photo_list[0])
+    except Exception:
+        logger.exception("Failed to resolve cached source URL", extra={"profile_name": name})
+        return None
 
 
 def send_profile(
@@ -164,100 +291,81 @@ def send_profile(
     death: str | None = None,
     photo_source_url: str | None = None,
 ) -> dict:
-    if not VKORNI_API_KEY:
-        return {"status": "ERROR", "error": "VKORNI_API_KEY is not set"}
-    if not VKORNI_NODE_ID:
-        return {"status": "ERROR", "error": "VKORNI_NODE_ID is not set"}
+    photo_list = list(photos) if photos else []
 
-    # Use biography text as fallback source for birth date
+    if not VKORNI_API_KEY:
+        return _error_result("VKORNI_API_KEY is not set")
+    if not VKORNI_NODE_ID:
+        return _error_result("VKORNI_NODE_ID is not set")
+
     if not birth:
         birth = _extract_birth_from_text(text)
 
-    photo_list = list(photos) if photos else []
-    attachment_ids: list[int] = []
-    effective_photo_url: str | None = None
-
-    # ── Apply memorial frame ──────────────────────────────────────────────────
-    # If the photo is already a framed image (from /static/accepted_images/),
-    # use it directly — no need to re-frame.
-    framed_path: str | None = None
-    for photo_url in photo_list[:1]:
-        local = _local_path(photo_url)
-        if os.path.exists(local):
-            if "accepted_images" in photo_url:
-                # Already framed by /api/frame — use as-is
-                framed_path = local
-                logger.warning("Using pre-framed image: %s", framed_path)
-            else:
-                try:
-                    from app.services.frame_service import compose_portrait
-                    framed_path = compose_portrait(local, birth=birth, death=death)
-                    logger.warning("Framed image: %s", framed_path)
-                except Exception:
-                    logger.exception("Frame composition failed — using original photo")
-                    framed_path = local
-            break
-        logger.warning("Photo file not found: %s (resolved: %s)", photo_url, local)
-
-    # ── Determine how to send the photo ──────────────────────────────────────
-    # Priority:
-    #   1. Upload framed image to XenForo → use returned direct_url in [IMG]
-    #      (works from localhost; XenForo hosts the file on their CDN)
-    #   2. Wikimedia URL as [IMG] fallback (no frame, but always reachable)
-    if framed_path:
-        logger.warning("Uploading framed image to XenForo: %s", framed_path)
-        upload = _upload_attachment(framed_path)
-        logger.warning("XenForo upload result: %s", upload)
-        if upload:
-            attachment_ids.append(upload["attachment_id"])
-            if upload["view_url"]:
-                effective_photo_url = upload["view_url"]
-                logger.warning("Using XenForo CDN URL: %s", effective_photo_url)
-            # If view_url is empty the [ATTACH=full] tag will be used as fallback
-        else:
-            # Upload failed — fall back to Wikimedia thumbnail
-            logger.warning("Upload failed, falling back to Wikimedia URL")
-            effective_photo_url = photo_source_url
-    elif photo_source_url:
-        # No framed image — use Wikimedia URL directly
-        effective_photo_url = photo_source_url
-
-    message = _build_message(text, attachment_ids, birth=birth, death=death,
-                             photo_source_url=effective_photo_url)
-
-    payload = {
-        "node_id":        int(VKORNI_NODE_ID),
-        "title":          name,
-        "message":        message,
-        "attachment_ids": attachment_ids,
-    }
+    resolved_photo_source_url = _resolve_cached_source_url(name, photo_list, photo_source_url)
+    prepared = _prepare_export_photo(photo_list, birth, death, resolved_photo_source_url)
+    if not prepared:
+        return _error_result(
+            "No exportable photo found for static XenForo upload",
+            source_photo_path=(photo_list[0] if photo_list else None),
+            source_photo_url=resolved_photo_source_url,
+            image_origin="missing",
+        )
 
     try:
-        form: dict[str, str] = {
-            "node_id": str(int(VKORNI_NODE_ID)),
-            "title":   payload["title"],
-            "message": payload["message"],
-        }
-        for i, aid in enumerate(payload["attachment_ids"]):
-            form[f"attachment_ids[{i}]"] = str(aid)
+        upload = _upload_attachment(prepared["export_path"])
+        if not upload or not upload.get("attachment_id"):
+            return _error_result(
+                "XenForo attachment upload failed; thread was not created",
+                source_photo_path=prepared.get("source_photo_path"),
+                source_photo_url=prepared.get("source_photo_url"),
+                image_origin=prepared.get("image_origin"),
+            )
 
-        body_bytes = urlencode(form, encoding="utf-8").encode("utf-8")
-        response = requests.post(
-            f"{VKORNI_BASE_URL.rstrip('/')}/threads/",
-            data=body_bytes,
-            headers={**_headers(), "Content-Type": "application/x-www-form-urlencoded; charset=utf-8"},
-            timeout=30,
+        attachment_id = upload["attachment_id"]
+        attachment_url = upload.get("view_url") or None
+        message = _build_message(
+            text,
+            [attachment_id],
+            birth=birth,
+            death=death,
+            attachment_url=attachment_url,
         )
-        if response.ok:
-            body = response.json()
-            thread_id = body.get("thread", {}).get("thread_id")
-            thread_url = f"https://vkorni.com/threads/{thread_id}/" if thread_id else None
-            return {"status": "OK", "thread_id": thread_id, "url": thread_url}
-        return {
-            "status": "ERROR",
-            "code": response.status_code,
-            "error": response.text[:500],
-        }
+
+        result = _create_thread(name, message, [attachment_id])
+        if result.get("status") != "OK":
+            result.update(
+                {
+                    "attachment_id": attachment_id,
+                    "attachment_url": attachment_url,
+                    "source_photo_path": prepared.get("source_photo_path"),
+                    "source_photo_url": prepared.get("source_photo_url"),
+                    "image_origin": prepared.get("image_origin"),
+                }
+            )
+            return result
+
+        result.update(
+            {
+                "attachment_id": attachment_id,
+                "attachment_url": attachment_url,
+                "source_photo_path": prepared.get("source_photo_path"),
+                "source_photo_url": prepared.get("source_photo_url"),
+                "image_origin": prepared.get("image_origin"),
+            }
+        )
+        return result
     except Exception as exc:
         logger.exception("VKorni export failed")
-        return {"status": "ERROR", "error": str(exc)}
+        return _error_result(
+            str(exc),
+            source_photo_path=prepared.get("source_photo_path"),
+            source_photo_url=prepared.get("source_photo_url"),
+            image_origin=prepared.get("image_origin"),
+        )
+    finally:
+        for path in prepared.get("cleanup_paths", []):
+            try:
+                if path and os.path.exists(path):
+                    os.remove(path)
+            except OSError:
+                logger.warning("Failed to remove temporary export file: %s", path)

@@ -46,7 +46,7 @@ def test_smoke_wiki_not_found(mock_wiki):
 
 # ── export ─────────────────────────────────────────────────────────────────────
 
-@patch("app.api.export.send_profile", return_value={"status": "OK"})
+@patch("app.api.export.export_profile_to_vkorni", return_value={"status": "OK"})
 def test_smoke_export(mock_send):
     assert client.post("/api/export", json={"name": "Яшин", "text": "Био"}).status_code == 200
 

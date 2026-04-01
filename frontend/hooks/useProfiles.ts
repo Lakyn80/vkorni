@@ -128,16 +128,21 @@ export function useProfiles(onNameResolved: (name: string) => void) {
         updateProfile(profile.id, {
           text: data.text || "",
           photos,
+          photoSources: data.photo_sources ?? {},
           selectedPhoto: photos[0] || profile.selectedPhoto || "",
+          birth: data.birth ?? null,
+          death: data.death ?? null,
+          framedPhotoUrl: null,
           error: "",
         });
+        if (photos[0]) applyFrame(profile.id, photos[0], data.birth ?? null, data.death ?? null);
       } catch (err) {
         updateProfile(profile.id, {
           error: err instanceof Error ? err.message : "Ошибка обновления",
         });
       }
     },
-    [updateProfile]
+    [applyFrame, updateProfile]
   );
 
   const exportProfile = useCallback(

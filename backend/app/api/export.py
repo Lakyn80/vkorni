@@ -16,7 +16,7 @@ from fastapi import APIRouter, HTTPException, UploadFile, File
 from pydantic import BaseModel
 
 from app.api.deps import validate_name, json_response
-from app.services.vkorny_export import send_profile
+from app.services.export_service import export_profile_to_vkorni
 from app.services.wiki_service import convert_to_webp
 from app.services.bulk_export_service import create_bulk_export, get_bulk_export
 from app.workers.export_worker import run_bulk_export
@@ -69,13 +69,14 @@ def _store_upload(file: UploadFile, person_name: str | None) -> str:
 
 @router.post("/export")
 def export_profile(payload: ExportProfile):
-    result = send_profile(
-        payload.name,
-        payload.text,
-        payload.photos,
+    result = export_profile_to_vkorni(
+        name=payload.name,
+        text=payload.text,
+        photos=payload.photos,
         birth=payload.birth,
         death=payload.death,
         photo_source_url=payload.photo_source_url,
+        export_kind="manual",
     )
     return json_response(result)
 

@@ -56,4 +56,4 @@ services:
     image: redis:7-alpine
     container_name: vkorni-redis
     ports:
-      - "6382:6379"
+      - "6383:6379"

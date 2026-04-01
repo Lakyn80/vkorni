@@ -41,6 +41,24 @@ class AdminUser(Base):
     reset_token_expires = Column(Float, nullable=True)  # unix timestamp
 
 
+class ExportRecord(Base):
+    __tablename__ = "export_records"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String(255), nullable=False, index=True)
+    export_kind = Column(String(32), nullable=False, default="manual")
+    status = Column(String(32), nullable=False, index=True)
+    source_photo_path = Column(String(500), nullable=True)
+    source_photo_url = Column(String(1000), nullable=True)
+    image_origin = Column(String(64), nullable=True)
+    attachment_id = Column(Integer, nullable=True, index=True)
+    attachment_url = Column(String(1000), nullable=True)
+    thread_id = Column(Integer, nullable=True, index=True)
+    thread_url = Column(String(500), nullable=True)
+    error = Column(Text, nullable=True)
+    created_at = Column(Float, nullable=False)
+
+
 def init_db():
     import os
     from passlib.context import CryptContext

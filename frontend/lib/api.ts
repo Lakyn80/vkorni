@@ -2,6 +2,10 @@ import type { Profile } from "@/types";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE || "http://localhost:8020";
 
+function isAbsoluteUrl(value: string | null | undefined): value is string {
+  return !!value && /^https?:\/\//i.test(value);
+}
+
 async function request<T>(url: string, options?: RequestInit): Promise<T> {
   const res = await fetch(url, options);
   if (!res.ok) {
@@ -57,10 +61,13 @@ export const api = {
   },
 
   export(profile: Pick<Profile, "name" | "text" | "photos" | "photoSources" | "selectedPhoto" | "birth" | "death" | "framedPhotoUrl">) {
-    // Use the pre-generated framed image if available, otherwise fall back to original photo
     const framedPhoto = profile.framedPhotoUrl || null;
     const photo = profile.selectedPhoto || profile.photos[0] || null;
-    const photoSourceUrl = !framedPhoto && photo && profile.photoSources ? (profile.photoSources[photo] ?? null) : null;
+    const mappedPhotoSource = photo && profile.photoSources ? (profile.photoSources[photo] ?? null) : null;
+    const directPhotoSource = isAbsoluteUrl(photo) ? photo : null;
+    // Always pass the original source as backup. Backend prefers the local framed file,
+    // but can re-download the source if an older cached local file is missing.
+    const photoSourceUrl = mappedPhotoSource ?? directPhotoSource;
     return request<{ status: string; error?: string; url?: string }>(
       `${API_BASE}/api/export`,
       {

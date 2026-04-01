@@ -9,7 +9,7 @@ import time
 
 from app.services.bulk_export_service import update_job, get_bulk_export
 from app.services.cache_service import get_biography
-from app.services.vkorny_export import send_profile
+from app.services.export_service import export_profile_to_vkorni
 
 logger = logging.getLogger(__name__)
 
@@ -30,13 +30,18 @@ def run_bulk_export(export_id: str) -> None:
                 update_job(export_id, name, "failed", error="Профиль не найден в кэше")
                 continue
 
-            result = send_profile(
+            photos = cached.get("photos", [])
+            photo_sources = cached.get("photo_sources") or {}
+            photo_source_url = photo_sources.get(photos[0]) if photos else None
+
+            result = export_profile_to_vkorni(
                 name=cached["name"],
                 text=cached["text"],
-                photos=cached.get("photos", []),
+                photos=photos,
                 birth=cached.get("birth"),
                 death=cached.get("death"),
-                photo_source_url=None,
+                photo_source_url=photo_source_url,
+                export_kind="bulk",
             )
 
             if result.get("status") == "OK":

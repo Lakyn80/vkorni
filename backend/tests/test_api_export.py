@@ -10,7 +10,7 @@ client = TestClient(app)
 
 # ── /export ────────────────────────────────────────────────────────────────────
 
-@patch("app.api.export.send_profile", return_value={"status": "OK", "thread_id": 42, "url": "https://vkorni.com/threads/42/"})
+@patch("app.api.export.export_profile_to_vkorni", return_value={"status": "OK", "thread_id": 42, "url": "https://vkorni.com/threads/42/"})
 def test_export_ok(mock_send):
     r = client.post("/api/export", json={
         "name": "Лев Яшин",
@@ -26,7 +26,7 @@ def test_export_ok(mock_send):
     mock_send.assert_called_once()
 
 
-@patch("app.api.export.send_profile", return_value={"status": "ERROR", "error": "API key missing"})
+@patch("app.api.export.export_profile_to_vkorni", return_value={"status": "ERROR", "error": "API key missing"})
 def test_export_error_propagated(mock_send):
     r = client.post("/api/export", json={
         "name": "Тест", "text": "...", "photos": [],
