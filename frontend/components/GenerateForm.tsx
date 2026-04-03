@@ -7,10 +7,14 @@ type Props = {
   onSubmit: (names: string[]) => void;
 };
 
+function normalizeName(value: string): string {
+  return value.replace(/\s*,\s*/g, " ").replace(/\s+/g, " ").trim();
+}
+
 function parseNames(input: string): string[] {
   return input
-    .split(/[\n,]+/)
-    .map((s) => s.trim())
+    .split(/\n+/)
+    .map(normalizeName)
     .filter(Boolean);
 }
 

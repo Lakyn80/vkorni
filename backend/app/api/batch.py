@@ -13,7 +13,7 @@ import logging
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from app.api.deps import json_response
+from app.api.deps import json_response, validate_person_name
 from app.services.batch_service import (
     create_batch as _create_batch,
     get_batch_status,
@@ -35,7 +35,7 @@ class BatchRequest(BaseModel):
 
 @router.post("/batch")
 def create_batch(payload: BatchRequest):
-    names = [n.strip() for n in payload.names if n.strip()]
+    names = [validate_person_name(n) for n in payload.names if n and n.strip()]
     if not names:
         raise HTTPException(status_code=400, detail="No names provided")
     if len(names) > 500:

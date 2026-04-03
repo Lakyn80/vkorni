@@ -21,7 +21,7 @@ export default function LoginPage() {
       document.cookie = `vkorni_token=${data.access_token}; path=/; SameSite=Lax; max-age=${60 * 60}`;
       router.push("/");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Neplatné přihlašovací údaje");
+      setError(err instanceof Error ? err.message : "Неверные учетные данные");
     } finally {
       setBusy(false);
     }
@@ -33,14 +33,14 @@ export default function LoginPage() {
         <div className="mb-8 text-center">
           <span className="text-xs font-bold uppercase tracking-[0.3em] text-ink/40">Vkorni</span>
           <h1 className="mt-2 text-2xl font-semibold text-ink" style={{ fontFamily: "var(--font-display)" }}>
-            Přihlášení
+            Вход
           </h1>
         </div>
 
         <form onSubmit={handleSubmit} className="flex flex-col gap-4">
           <input
             type="text"
-            placeholder="Uživatelské jméno"
+            placeholder="Имя пользователя"
             value={username}
             onChange={(e) => setUsername(e.target.value)}
             required
@@ -49,7 +49,7 @@ export default function LoginPage() {
           />
           <input
             type="password"
-            placeholder="Heslo"
+            placeholder="Пароль"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
             required
@@ -65,7 +65,7 @@ export default function LoginPage() {
             disabled={busy}
             className="rounded-xl bg-ink px-4 py-3 text-sm font-semibold text-white transition-colors hover:bg-ink/80 disabled:opacity-50"
           >
-            {busy ? "Přihlašování…" : "Přihlásit se"}
+            {busy ? "Вход..." : "Войти"}
           </button>
         </form>
       </div>

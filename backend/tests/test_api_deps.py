@@ -1,11 +1,15 @@
 """Tests for api/deps.py — validate_name, json_response."""
 import pytest
 from fastapi import HTTPException
-from app.api.deps import validate_name, json_response
+from app.api.deps import validate_name, validate_person_name, json_response
 
 
 def test_validate_name_ok():
     assert validate_name("  Иван Петров  ") == "Иван Петров"
+
+
+def test_validate_person_name_normalizes_comma_name():
+    assert validate_person_name("  Пушкин,   Александр   Сергеевич ") == "Пушкин Александр Сергеевич"
 
 
 def test_validate_name_empty():

@@ -2,11 +2,11 @@ services:
   backend:
     image: ghcr.io/lakyn80/vkorni-backend:latest
     volumes:
-      - ./static/photos:/app/static/photos
-      - ./static/accepted_images:/app/static/accepted_images
-      - ./static/rejected_images:/app/static/rejected_images
-      - ./frames:/app/frames
-      - ./data:/app/app/data
+      - backend_photos:/app/static/photos
+      - backend_accepted_images:/app/static/accepted_images
+      - backend_rejected_images:/app/static/rejected_images
+      - backend_data:/app/app/data
+      - backend_chroma:/app/chroma_data
     ports:
       - "8020:8000"
     depends_on:
@@ -19,17 +19,16 @@ services:
     image: ghcr.io/lakyn80/vkorni-backend:latest
     command: rq worker bios images --url ${REDIS_URL}
     volumes:
-      - ./static/photos:/app/static/photos
-      - ./static/accepted_images:/app/static/accepted_images
-      - ./static/rejected_images:/app/static/rejected_images
-      - ./frames:/app/frames
+      - backend_photos:/app/static/photos
+      - backend_accepted_images:/app/static/accepted_images
+      - backend_rejected_images:/app/static/rejected_images
+      - backend_data:/app/app/data
+      - backend_chroma:/app/chroma_data
     depends_on:
       - redis
     env_file:
       - .env
-    restart: always
-    deploy:
-      replicas: 2
+    restart: unless-stopped
 
   frontend:
     image: ghcr.io/lakyn80/vkorni-frontend:latest
@@ -45,3 +44,10 @@ services:
     ports:
       - "6382:6379"
     restart: unless-stopped
+
+volumes:
+  backend_photos:
+  backend_accepted_images:
+  backend_rejected_images:
+  backend_data:
+  backend_chroma:

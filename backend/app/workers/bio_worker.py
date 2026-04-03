@@ -117,7 +117,7 @@ def process_biography(batch_id: str, name: str, style_name: str | None = None) -
 
         # ── 3. Fetch images ─────────────────────────────────────────────────
         try:
-            downloaded = _fetch_images(person.get("name") or name)
+            downloaded = _fetch_images(name)
         except Exception as exc:
             logger.warning("[batch:%s] Image fetch failed (continuing without): %s", batch_id, exc)
             downloaded = []

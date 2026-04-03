@@ -15,7 +15,7 @@ import logging
 
 from fastapi import APIRouter, HTTPException, Query
 
-from app.api.deps import validate_name, json_response
+from app.api.deps import validate_person_name, json_response
 from app.services.cache_service import (
     get_biography, set_biography,
     delete_biography, list_biographies, delete_all_biographies,
@@ -60,7 +60,7 @@ def generate(
     force_regenerate: bool = Query(False, alias="FORCE_REGENERATE"),
     style_name: str | None = Query(None, alias="STYLE_NAME"),
 ):
-    person_name = validate_name(name)
+    person_name = validate_person_name(name)
 
     if not force_regenerate:
         cached = get_biography(person_name)
@@ -104,7 +104,7 @@ def generate(
     if _is_text_too_short(text):
         raise HTTPException(status_code=500, detail="Generated text is too short")
 
-    downloaded = fetch_person_images(person.get("name") or person_name)
+    downloaded = fetch_person_images(person_name)
     photo_rows = get_photos_by_person(person_name)
     photos, photo_sources = _build_photo_maps(downloaded, photo_rows, person)
 
@@ -131,7 +131,7 @@ def cache_delete_all():
 
 @router.get("/cache/{name}")
 def get_cached_profile(name: str):
-    person_name = validate_name(name)
+    person_name = validate_person_name(name)
     cached = get_biography(person_name)
     if not cached:
         raise HTTPException(status_code=404, detail="Profile not found in cache")
@@ -140,13 +140,14 @@ def get_cached_profile(name: str):
 
 @router.delete("/cache/{name}")
 def delete_cache(name: str):
-    deleted = delete_cached(name)
-    return json_response({"deleted": deleted, "name": name})
+    person_name = validate_person_name(name)
+    deleted = delete_cached(person_name)
+    return json_response({"deleted": deleted, "name": person_name})
 
 
 @router.get("/wiki/{name}")
 def wiki_lookup(name: str):
-    person_name = validate_name(name)
+    person_name = validate_person_name(name)
     person = fetch_person_from_wikipedia(person_name)
     if not person:
         raise HTTPException(status_code=404, detail="Person not found on Wikipedia")

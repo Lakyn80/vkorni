@@ -1,6 +1,7 @@
 # Environment
 .env
 .env.*
+!.env.example
 
 # Python
 __pycache__/
@@ -8,32 +9,52 @@ __pycache__/
 *.pyc
 *.pyo
 *.pyd
+*.py[cod]
 *.egg-info/
 .pytest_cache/
 .mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
 backend/.venv/
 backend/venv/
 
-# Database
+# Database / runtime data
 *.db
 *.sqlite3
+backend/app/data/*
+!backend/app/data/.gitkeep
+backend/chroma_data/
+backend/photos.db
 
 # Node / Next.js
 node_modules/
+frontend/node_modules/
 .next/
-
-# OS
-.DS_Store
-Thumbs.db
+frontend/.next/
+dist/
+build/
+coverage/
+*.tsbuildinfo
 
 # Static uploads (runtime data)
-backend/static/photos/
-backend/static/accepted_images/
-backend/static/rejected_images/
+backend/static/photos/*
+!backend/static/photos/.gitkeep
+backend/static/accepted_images/*
+!backend/static/accepted_images/.gitkeep
+backend/static/rejected_images/*
+!backend/static/rejected_images/.gitkeep
 
 # Logs
 *.log
 npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# OS
+.DS_Store
+Thumbs.db
 
 # IDE
 .vscode/

@@ -42,6 +42,14 @@ def test_create_batch_strips_empty_names(mock_enqueue, mock_create):
     assert r.json()["total"] == 2
 
 
+@patch("app.api.batch._create_batch", return_value="abc123")
+@patch("app.api.batch.enqueue_job")
+def test_create_batch_normalizes_comma_name(mock_enqueue, mock_create):
+    r = client.post("/api/batch", json={"names": ["Пушкин, Александр Сергеевич", "  Виктор   Цой  "]})
+    assert r.status_code == 200
+    mock_create.assert_called_once_with(["Пушкин Александр Сергеевич", "Виктор Цой"])
+
+
 def test_create_batch_empty_list():
     r = client.post("/api/batch", json={"names": []})
     assert r.status_code == 400

@@ -85,7 +85,7 @@ vkorni/
 
 ### 1. Konfigurace `.env`
 
-Zkopíruj `.env.example` (nebo uprav `.env`) a vyplň:
+Zkopíruj `.env.example` na `.env` a vyplň hodnoty:
 
 ```env
 # DeepSeek AI
@@ -109,11 +109,19 @@ ADMIN_USERNAME=admin
 ADMIN_PASSWORD=admin123
 ```
 
-### 2. Spuštění
+### 2. Spuštění v Docker Desktop
 
 ```bash
-docker compose up --build
+docker compose up -d --build
 ```
+
+Pokud chceš dva workery i v Docker Desktop, spusť:
+
+```bash
+docker compose up -d --build --scale worker=2
+```
+
+Runtime data se ukládají do Docker volumes, ne do repozitáře. Tím se do gitu netahají SQLite data, Chroma index ani vygenerované obrázky.
 
 | Služba | URL |
 |---|---|

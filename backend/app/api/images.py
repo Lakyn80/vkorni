@@ -17,7 +17,7 @@ from uuid import uuid4
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
-from app.api.deps import validate_name, json_response
+from app.api.deps import validate_person_name, json_response
 from app.workers.queue_backend import enqueue_job
 from app.workers.job_store import set_status, get_status
 from app.workers.image_worker import process_images_for_person
@@ -34,7 +34,7 @@ def start_image_job(
     profession: str | None = Query(None, description="artist, politician, scientist, athlete …"),
 ):
     """Enqueue a background image-processing job. Returns immediately with job_id."""
-    person_name = validate_name(name)
+    person_name = validate_person_name(name)
     job_id = uuid4().hex
 
     try:
@@ -57,7 +57,7 @@ def poll_image_job(job_id: str):
 @router.get("/images/{name}")
 def list_accepted_images(name: str):
     """List accepted (framed) portrait images for a person."""
-    person_name = validate_name(name)
+    person_name = validate_person_name(name)
     pattern = os.path.join(settings.accepted_dir, "*.jpg")
     files = sorted(_glob.glob(pattern))
     rel_paths = [f"/static/accepted_images/{os.path.basename(p)}" for p in files]

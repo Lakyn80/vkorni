@@ -3,6 +3,8 @@ deps.py
 -------
 Shared dependencies for all API routers.
 """
+import re
+
 from fastapi import Depends, HTTPException
 from fastapi.responses import JSONResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -18,11 +20,33 @@ CORS_HEADERS = {
     "Access-Control-Allow-Headers": "*",
 }
 
+_WHITESPACE_RE = re.compile(r"\s+")
+
+
+def normalize_name(name: str) -> str:
+    return _WHITESPACE_RE.sub(" ", name).strip()
+
+
+def normalize_person_name(name: str) -> str:
+    # Treat commas inside a single person name as punctuation, not a separator.
+    return normalize_name(name.replace(",", " "))
+
 
 def validate_name(name: str) -> str:
     if not name or not name.strip():
         raise HTTPException(status_code=400, detail="Missing or empty name")
-    cleaned = name.strip()
+    cleaned = normalize_name(name)
+    if len(cleaned) > 120:
+        raise HTTPException(status_code=400, detail="Name is too long")
+    if any(ord(ch) < 32 for ch in cleaned):
+        raise HTTPException(status_code=400, detail="Invalid characters in name")
+    return cleaned
+
+
+def validate_person_name(name: str) -> str:
+    if not name or not name.strip():
+        raise HTTPException(status_code=400, detail="Missing or empty name")
+    cleaned = normalize_person_name(name)
     if len(cleaned) > 120:
         raise HTTPException(status_code=400, detail="Name is too long")
     if any(ord(ch) < 32 for ch in cleaned):

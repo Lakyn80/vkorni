@@ -4,10 +4,11 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     volumes:
-      - ./backend/static/photos:/app/static/photos
-      - ./backend/static/accepted_images:/app/static/accepted_images
-      - ./backend/static/rejected_images:/app/static/rejected_images
-      - ./backend/frames:/app/frames
+      - backend_photos:/app/static/photos
+      - backend_accepted_images:/app/static/accepted_images
+      - backend_rejected_images:/app/static/rejected_images
+      - backend_data:/app/app/data
+      - backend_chroma:/app/chroma_data
     ports:
       - "8020:8000"
     depends_on:
@@ -17,6 +18,7 @@ services:
     dns:
       - 8.8.8.8
       - 1.1.1.1
+    restart: unless-stopped
 
   worker:
     build:
@@ -24,10 +26,11 @@ services:
       dockerfile: Dockerfile
     command: rq worker bios images --url ${REDIS_URL}
     volumes:
-      - ./backend/static/photos:/app/static/photos
-      - ./backend/static/accepted_images:/app/static/accepted_images
-      - ./backend/static/rejected_images:/app/static/rejected_images
-      - ./backend/frames:/app/frames
+      - backend_photos:/app/static/photos
+      - backend_accepted_images:/app/static/accepted_images
+      - backend_rejected_images:/app/static/rejected_images
+      - backend_data:/app/app/data
+      - backend_chroma:/app/chroma_data
     depends_on:
       - redis
     env_file:
@@ -35,9 +38,7 @@ services:
     dns:
       - 8.8.8.8
       - 1.1.1.1
-    restart: always
-    deploy:
-      replicas: 2
+    restart: unless-stopped
 
   frontend:
     build:
@@ -51,9 +52,18 @@ services:
       - "3014:3000"
     depends_on:
       - backend
+    restart: unless-stopped
 
   redis:
     image: redis:7-alpine
     container_name: vkorni-redis
     ports:
       - "6383:6379"
+    restart: unless-stopped
+
+volumes:
+  backend_photos:
+  backend_accepted_images:
+  backend_rejected_images:
+  backend_data:
+  backend_chroma:

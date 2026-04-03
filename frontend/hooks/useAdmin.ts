@@ -24,7 +24,7 @@ export function useAdmin() {
       localStorage.setItem(TOKEN_KEY, data.access_token);
       setToken(data.access_token);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Chyba přihlášení");
+      setError(err instanceof Error ? err.message : "Ошибка входа");
     } finally {
       setBusy(false);
     }

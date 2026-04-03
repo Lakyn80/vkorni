@@ -59,6 +59,25 @@ def test_generate_new_profile(mock_set, mock_photos_repo, mock_images, mock_uniq
 @patch("app.api.biography.get_biography", return_value=None)
 @patch("app.api.biography.fetch_person_from_wikipedia", return_value=FAKE_PERSON)
 @patch("app.api.biography.get_style_context", return_value="style")
+@patch("app.api.biography.generate_text", return_value=(LONG_TEXT, "angle1"))
+@patch("app.api.biography.is_unique_enough", return_value=True)
+@patch("app.api.biography.fetch_person_images", return_value=[])
+@patch("app.api.biography.get_photos_by_person", return_value=[])
+@patch("app.api.biography.set_biography")
+def test_generate_normalizes_comma_name(mock_set, mock_photos_repo, mock_images, mock_unique,
+                                        mock_gen, mock_style, mock_wiki, mock_cache):
+    r = client.post("/api/generate?name=Пушкин,%20Александр%20Сергеевич")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["name"] == "Пушкин Александр Сергеевич"
+    mock_wiki.assert_called_once_with("Пушкин Александр Сергеевич")
+    mock_images.assert_called_once_with("Пушкин Александр Сергеевич")
+    mock_set.assert_called_once()
+
+
+@patch("app.api.biography.get_biography", return_value=None)
+@patch("app.api.biography.fetch_person_from_wikipedia", return_value=FAKE_PERSON)
+@patch("app.api.biography.get_style_context", return_value="style")
 @patch("app.api.biography.generate_text", return_value=("кратко", "angle1"))
 @patch("app.api.biography.fetch_person_images", return_value=[])
 @patch("app.api.biography.get_photos_by_person", return_value=[])
