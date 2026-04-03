@@ -2,6 +2,7 @@ import logging
 import os
 import re
 import tempfile
+import time
 from typing import Iterable
 from urllib.parse import unquote, urlencode, urljoin, urlparse
 
@@ -15,6 +16,9 @@ VKORNI_BASE_URL = os.getenv("VKORNI_BASE_URL", "https://vkorni.com/api")
 VKORNI_API_KEY = os.getenv("VKORNI_API_KEY", "")
 VKORNI_NODE_ID = os.getenv("VKORNI_NODE_ID", "")
 VKORNI_USER_ID = os.getenv("VKORNI_USER_ID", "1")
+HTTP_RETRY_ATTEMPTS = 3
+HTTP_RETRY_DELAY_SECONDS = 2
+RETRYABLE_STATUS_CODES = {408, 429, 500, 502, 503, 504}
 
 
 def _headers() -> dict:
@@ -50,37 +54,94 @@ def _is_remote_image_url(url: str) -> bool:
     return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
 
 
+def _sleep_before_retry(attempt: int) -> None:
+    time.sleep(HTTP_RETRY_DELAY_SECONDS * attempt)
+
+
+def _should_retry_response(status_code: int) -> bool:
+    return status_code in RETRYABLE_STATUS_CODES
+
+
 def _upload_attachment(file_path: str) -> dict | None:
     base = VKORNI_BASE_URL.rstrip("/")
     try:
-        r = requests.post(
-            f"{base}/attachments/new-key/",
-            data={"type": "post", "context[node_id]": VKORNI_NODE_ID},
-            headers=_headers(),
-            timeout=15,
-        )
-        if not r.ok:
+        key = None
+        for attempt in range(1, HTTP_RETRY_ATTEMPTS + 1):
+            try:
+                r = requests.post(
+                    f"{base}/attachments/new-key/",
+                    data={"type": "post", "context[node_id]": VKORNI_NODE_ID},
+                    headers=_headers(),
+                    timeout=15,
+                )
+            except requests.RequestException:
+                if attempt == HTTP_RETRY_ATTEMPTS:
+                    raise
+                logger.warning("XenForo new-key request failed for %s, retry %d/%d", file_path, attempt, HTTP_RETRY_ATTEMPTS)
+                _sleep_before_retry(attempt)
+                continue
+
+            if r.ok:
+                key = r.json().get("key")
+                break
+
+            if attempt < HTTP_RETRY_ATTEMPTS and _should_retry_response(r.status_code):
+                logger.warning(
+                    "XenForo new-key returned %s for %s, retry %d/%d",
+                    r.status_code,
+                    file_path,
+                    attempt,
+                    HTTP_RETRY_ATTEMPTS,
+                )
+                _sleep_before_retry(attempt)
+                continue
+
             logger.error("XenForo new-key failed: %s %s", r.status_code, r.text[:200])
             return None
 
-        key = r.json().get("key")
         if not key:
             logger.error("XenForo new-key response missing key")
             return None
 
         filename = os.path.basename(file_path)
         mime = "image/jpeg" if file_path.lower().endswith((".jpg", ".jpeg")) else "image/webp"
-        with open(file_path, "rb") as f:
-            r2 = requests.post(
-                f"{base}/attachments/",
-                params={"key": key},
-                files={"attachment": (filename, f, mime)},
-                headers=_headers(),
-                timeout=30,
-            )
+        r2 = None
+        for attempt in range(1, HTTP_RETRY_ATTEMPTS + 1):
+            try:
+                with open(file_path, "rb") as f:
+                    r2 = requests.post(
+                        f"{base}/attachments/",
+                        params={"key": key},
+                        files={"attachment": (filename, f, mime)},
+                        headers=_headers(),
+                        timeout=30,
+                    )
+            except requests.RequestException:
+                if attempt == HTTP_RETRY_ATTEMPTS:
+                    raise
+                logger.warning("XenForo attachment upload request failed for %s, retry %d/%d", file_path, attempt, HTTP_RETRY_ATTEMPTS)
+                _sleep_before_retry(attempt)
+                continue
 
-        if not r2.ok:
+            if r2.ok:
+                break
+
+            if attempt < HTTP_RETRY_ATTEMPTS and _should_retry_response(r2.status_code):
+                logger.warning(
+                    "XenForo attachment upload returned %s for %s, retry %d/%d",
+                    r2.status_code,
+                    file_path,
+                    attempt,
+                    HTTP_RETRY_ATTEMPTS,
+                )
+                _sleep_before_retry(attempt)
+                continue
+
             logger.error("XenForo attachment upload failed: %s %s", r2.status_code, r2.text[:200])
+            return None
+
+        if not r2 or not r2.ok:
+            logger.error("XenForo attachment upload failed without usable response for %s", file_path)
             return None
 
         att = r2.json().get("attachment", {})
@@ -152,19 +213,54 @@ def _extract_birth_from_text(text: str) -> str | None:
 
 
 def _download_source_photo(url: str) -> str | None:
+    path = None
     try:
         parsed = urlparse(url)
         suffix = os.path.splitext(unquote(os.path.basename(parsed.path)))[1] or ".img"
         fd, path = tempfile.mkstemp(prefix="vkorni-export-", suffix=suffix)
         os.close(fd)
 
-        response = requests.get(url, timeout=20)
-        response.raise_for_status()
+        response = None
+        for attempt in range(1, HTTP_RETRY_ATTEMPTS + 1):
+            try:
+                response = requests.get(url, timeout=20)
+            except requests.RequestException:
+                if attempt == HTTP_RETRY_ATTEMPTS:
+                    raise
+                logger.warning("Source photo download request failed for %s, retry %d/%d", url, attempt, HTTP_RETRY_ATTEMPTS)
+                _sleep_before_retry(attempt)
+                continue
+
+            if response.ok:
+                break
+
+            if attempt < HTTP_RETRY_ATTEMPTS and _should_retry_response(response.status_code):
+                logger.warning(
+                    "Source photo download returned %s for %s, retry %d/%d",
+                    response.status_code,
+                    url,
+                    attempt,
+                    HTTP_RETRY_ATTEMPTS,
+                )
+                _sleep_before_retry(attempt)
+                continue
+            break
+
+        if not response or not response.ok:
+            status = response.status_code if response is not None else "n/a"
+            logger.error("Source photo download failed: %s %s", status, url)
+            return None
+
         with open(path, "wb") as f:
             f.write(response.content)
         return path
     except Exception:
         logger.exception("Source photo download failed", extra={"url": url})
+        if path and os.path.exists(path):
+            try:
+                os.remove(path)
+            except OSError:
+                logger.warning("Failed to remove temporary downloaded photo: %s", path)
         return None
 
 
@@ -180,26 +276,50 @@ def _prepare_export_photo(
     source_photo_path: str | None = None
     image_origin: str | None = None
     resolved_source_url = photo_source_url
+    accepted_local_candidates: list[tuple[str, str]] = []
+    local_candidates: list[tuple[str, str]] = []
+    remote_candidates: list[str] = []
+    seen_remote_candidates: set[str] = set()
 
-    for photo_url in photo_list[:1]:
+    def add_remote_candidate(url: str | None) -> None:
+        if not url or url in seen_remote_candidates:
+            return
+        seen_remote_candidates.add(url)
+        remote_candidates.append(url)
+
+    add_remote_candidate(photo_source_url)
+
+    for photo_url in photo_list:
         if _is_remote_image_url(photo_url):
-            if not resolved_source_url:
-                resolved_source_url = photo_url
+            add_remote_candidate(photo_url)
+            resolved_source_url = resolved_source_url or photo_url
             continue
         local = _local_path(photo_url)
         if os.path.exists(local):
-            source_local_path = local
-            source_photo_path = photo_url
-            image_origin = "accepted_local" if "accepted_images" in photo_url else "photo_local"
-            break
+            if "accepted_images" in photo_url:
+                accepted_local_candidates.append((local, photo_url))
+            else:
+                local_candidates.append((local, photo_url))
+            continue
         logger.warning("Photo file not found: %s (resolved: %s)", photo_url, local)
 
-    if source_local_path is None and resolved_source_url:
-        downloaded = _download_source_photo(resolved_source_url)
-        if downloaded:
+    if accepted_local_candidates:
+        source_local_path, source_photo_path = accepted_local_candidates[0]
+        image_origin = "accepted_local"
+    elif local_candidates:
+        source_local_path, source_photo_path = local_candidates[0]
+        image_origin = "photo_local"
+
+    if source_local_path is None:
+        for remote_url in remote_candidates:
+            downloaded = _download_source_photo(remote_url)
+            if not downloaded:
+                continue
             cleanup_paths.append(downloaded)
             source_local_path = downloaded
+            resolved_source_url = remote_url
             image_origin = "photo_source_download"
+            break
 
     if source_local_path is None:
         return None

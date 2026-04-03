@@ -6,11 +6,12 @@ from app.services.vkorny_export import _absolute_attachment_url, _prepare_export
 
 
 class DummyResponse:
-    def __init__(self, payload: dict, ok: bool = True, status_code: int = 200, text: str = ""):
+    def __init__(self, payload: dict, ok: bool = True, status_code: int = 200, text: str = "", content: bytes = b""):
         self._payload = payload
         self.ok = ok
         self.status_code = status_code
         self.text = text
+        self.content = content
 
     def json(self):
         return self._payload
@@ -100,3 +101,43 @@ def test_prepare_export_photo_accepts_absolute_photo_url(mock_frame, mock_exists
     assert result["export_path"] == "/tmp/downloaded_frame.jpg"
     assert result["source_photo_url"] == "https://upload.wikimedia.org/example/Test.webp"
     assert result["image_origin"] == "framed_source_download"
+
+
+@patch("app.services.vkorny_export.os.path.exists", side_effect=[False, True])
+@patch("app.services.frame_service.compose_portrait", return_value="/app/static/accepted_images/second_frame.jpg")
+def test_prepare_export_photo_falls_back_to_next_existing_local_photo(mock_frame, mock_exists):
+    result = _prepare_export_photo(
+        ["/static/photos/Test/missing.webp", "/static/photos/Test/second.webp"],
+        birth="1934",
+        death="1968",
+        photo_source_url=None,
+    )
+
+    assert result is not None
+    assert result["source_photo_path"] == "/static/photos/Test/second.webp"
+    assert result["export_path"] == "/app/static/accepted_images/second_frame.jpg"
+    assert result["image_origin"] == "framed_local"
+
+
+@patch("app.services.vkorny_export.time.sleep")
+@patch("app.services.vkorny_export.requests.post")
+def test_upload_attachment_retries_transient_new_key_failure(mock_post, mock_sleep):
+    mock_post.side_effect = [
+        DummyResponse({}, ok=False, status_code=503, text="temporary outage"),
+        DummyResponse({"key": "upload-key"}),
+        DummyResponse({"attachment": {"attachment_id": 42, "direct_url": "/data/attachments/1/42-photo.jpg"}}),
+    ]
+
+    fd, path = tempfile.mkstemp(suffix=".jpg")
+    os.close(fd)
+    try:
+        result = _upload_attachment(path)
+    finally:
+        os.remove(path)
+
+    assert result == {
+        "attachment_id": 42,
+        "view_url": "https://vkorni.com/data/attachments/1/42-photo.jpg",
+    }
+    assert mock_post.call_count == 3
+    mock_sleep.assert_called_once()
