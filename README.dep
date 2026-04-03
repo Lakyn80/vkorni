@@ -1,0 +1,241 @@
+# Deployment Guide
+
+This file describes how to deploy Vkorni safely without breaking production.
+
+Important:
+- Push to `main` triggers the GitHub Actions deploy workflow.
+- Push to any other branch does not deploy.
+- Docs-only or test-only changes must never be pushed to `main`.
+
+## Current Production Model
+
+The current production setup uses:
+- GHCR images:
+  - `ghcr.io/lakyn80/vkorni-backend:latest`
+  - `ghcr.io/lakyn80/vkorni-frontend:latest`
+- server path: `/opt/vkorni`
+- production compose file: `docker-compose.prod.yml`
+- auto deploy trigger: push to `main`
+
+## Safe Rules
+
+1. Never push unfinished work to `main`.
+2. Never mix local dev compose and production compose on the server.
+3. Keep `/opt/vkorni/.env` on the server correct before any deploy.
+4. Frontend and backend must point to the right production URLs.
+5. If you only changed backend, do not restart frontend unless needed.
+6. If you only changed frontend, do not restart backend unless needed.
+
+## Server Prerequisites
+
+The server must already contain:
+- `/opt/vkorni/docker-compose.prod.yml`
+- `/opt/vkorni/.env`
+- Docker and Docker Compose plugin
+- access to GHCR
+
+Important environment values on the server:
+- `VKORNI_API_KEY`
+- `VKORNI_NODE_ID`
+- `VKORNI_USER_ID`
+- `DEEPSEEK_KEY`
+- `BACKEND_PUBLIC_URL`
+- `NEXT_PUBLIC_API_BASE`
+- `JWT_SECRET`
+- `REDIS_URL`
+
+## Standard Full Deploy Through GitHub Actions
+
+Use this when both frontend and backend are ready.
+
+### Local steps
+
+```bash
+git switch main
+git pull origin main
+git merge <your-working-branch>
+git push origin main
+```
+
+### What happens automatically
+
+The workflow in `.github/workflows/deploy.yml`:
+- builds backend image
+- builds frontend image
+- pushes both to GHCR
+- SSHes into the server
+- runs:
+
+```bash
+cd /opt/vkorni
+docker compose -f docker-compose.prod.yml pull
+docker compose -f docker-compose.prod.yml up -d
+docker image prune -f
+```
+
+## Direct Backend-Only Deploy
+
+Use this when only backend code changed and you do not want to touch frontend.
+
+### 1. Build and push only backend image
+
+Run locally:
+
+```bash
+docker login ghcr.io
+docker buildx build --platform linux/amd64 -t ghcr.io/lakyn80/vkorni-backend:latest ./backend --push
+```
+
+### 2. Restart only backend services on the server
+
+Run on the server:
+
+```bash
+cd /opt/vkorni
+docker login ghcr.io
+docker compose -f docker-compose.prod.yml pull backend worker
+docker compose -f docker-compose.prod.yml up -d backend worker
+docker compose -f docker-compose.prod.yml ps
+```
+
+### 3. Verify backend
+
+Run on the server:
+
+```bash
+docker compose -f docker-compose.prod.yml logs --tail=200 backend
+docker compose -f docker-compose.prod.yml logs --tail=200 worker
+```
+
+Check externally:
+- backend health or docs endpoint
+- one manual export
+- one small bulk export
+
+## Direct Frontend-Only Deploy
+
+Use this when only frontend code changed.
+
+### 1. Build and push only frontend image
+
+Run locally:
+
+```bash
+docker login ghcr.io
+docker buildx build --platform linux/amd64 --build-arg NEXT_PUBLIC_API_BASE=<production-backend-url> -t ghcr.io/lakyn80/vkorni-frontend:latest ./frontend --push
+```
+
+Important:
+- `NEXT_PUBLIC_API_BASE` is baked into the frontend image at build time.
+- If this value is wrong, the UI will point to the wrong backend.
+
+### 2. Restart only frontend on the server
+
+Run on the server:
+
+```bash
+cd /opt/vkorni
+docker login ghcr.io
+docker compose -f docker-compose.prod.yml pull frontend
+docker compose -f docker-compose.prod.yml up -d frontend
+docker compose -f docker-compose.prod.yml ps
+```
+
+### 3. Verify frontend
+
+Run on the server:
+
+```bash
+docker compose -f docker-compose.prod.yml logs --tail=200 frontend
+```
+
+Then check in browser:
+- login page
+- biography generation page
+- export button flow
+
+## Direct Full Deploy Without GitHub Actions
+
+Use this only if you intentionally want manual control.
+
+### 1. Build and push both images
+
+```bash
+docker login ghcr.io
+docker buildx build --platform linux/amd64 -t ghcr.io/lakyn80/vkorni-backend:latest ./backend --push
+docker buildx build --platform linux/amd64 --build-arg NEXT_PUBLIC_API_BASE=<production-backend-url> -t ghcr.io/lakyn80/vkorni-frontend:latest ./frontend --push
+```
+
+### 2. Pull and restart on the server
+
+```bash
+cd /opt/vkorni
+docker login ghcr.io
+docker compose -f docker-compose.prod.yml pull
+docker compose -f docker-compose.prod.yml up -d
+docker compose -f docker-compose.prod.yml ps
+```
+
+## Post-Deploy Checks
+
+Always check all of these:
+
+1. Containers are running:
+
+```bash
+docker compose -f docker-compose.prod.yml ps
+```
+
+2. Logs do not show obvious startup failures:
+
+```bash
+docker compose -f docker-compose.prod.yml logs --tail=200 backend
+docker compose -f docker-compose.prod.yml logs --tail=200 worker
+docker compose -f docker-compose.prod.yml logs --tail=200 frontend
+```
+
+3. Frontend opens correctly.
+4. Backend responds correctly.
+5. One single export works.
+6. One bulk export works.
+
+## Bulk Export Safety Notes
+
+The export system is now more resilient than before:
+- each profile exports in its own job
+- each item has persisted attempts
+- retries happen automatically
+- stalled jobs can be resumed by a watchdog
+
+Still, these are not magic guarantees. Bulk export can still be affected by:
+- `vkorni.com` API downtime
+- Redis outage
+- server outage
+- wrong server `.env`
+
+## What Not To Do
+
+- Do not push docs or experiments to `main`.
+- Do not run `docker-compose.yml` on the production server.
+- Do not redeploy frontend with a wrong `NEXT_PUBLIC_API_BASE`.
+- Do not edit `/opt/vkorni/.env` blindly without checking production URLs and secrets.
+- Do not restart everything if only one service changed.
+
+## Recommended Workflow For Normal Work
+
+1. Work on a feature branch.
+2. Test locally.
+3. Push the branch.
+4. Review the diff.
+5. Merge to `main` only when you actually want production deploy.
+6. Watch GitHub Actions.
+7. Verify production after deploy.
+
+## Current Limitation
+
+The deployment currently uses mutable `latest` tags. That is convenient, but rollback is weaker than it should be.
+
+The safer future improvement would be:
+- build versioned tags per commit
+- deploy pinned image tags
+- keep a documented rollback command per release
