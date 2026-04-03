@@ -19,8 +19,7 @@ from app.api.deps import validate_name, json_response
 from app.services.export_service import export_profile_to_vkorni
 from app.services.wiki_service import convert_to_webp
 from app.services.bulk_export_service import create_bulk_export, get_bulk_export
-from app.workers.export_worker import run_bulk_export
-from app.workers.queue_backend import enqueue_job
+from app.workers.export_worker import schedule_bulk_export
 from app.config import settings
 
 logger = logging.getLogger(__name__)
@@ -89,8 +88,12 @@ class BulkExportRequest(BaseModel):
 def start_bulk_export(payload: BulkExportRequest):
     if not payload.names:
         raise HTTPException(status_code=400, detail="No names provided")
-    export_id = create_bulk_export(payload.names)
-    enqueue_job(run_bulk_export, export_id, queue="bios", job_timeout=3600)
+    try:
+        export_id = create_bulk_export(payload.names)
+        schedule_bulk_export(export_id)
+    except Exception as exc:
+        logger.error("Failed to start bulk export: %s", exc)
+        raise HTTPException(status_code=503, detail="Bulk export queue unavailable — please retry later")
     return json_response({"export_id": export_id, "total": len(payload.names)})
 
 

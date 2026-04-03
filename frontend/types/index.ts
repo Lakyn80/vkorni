@@ -1,6 +1,6 @@
 export type ExportState = "idle" | "sending" | "ok" | "error";
 
-export type BulkExportJobStatus = "pending" | "running" | "done" | "failed";
+export type BulkExportJobStatus = "pending" | "queued" | "running" | "retrying" | "done" | "failed";
 
 export type BulkExportJob = {
   name: string;
@@ -15,6 +15,8 @@ export type BulkExportStatus = {
   done: number;
   failed: number;
   running: number;
+  queued?: number;
+  retrying?: number;
   pending: number;
   results: BulkExportJob[];
 };

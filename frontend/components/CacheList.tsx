@@ -152,6 +152,8 @@ export function CacheList({ names, loading, error, onSelect, onRefresh, onDelete
                       <span className="shrink-0 text-red-400" title={r.error ?? ""}>✗ Ошибка</span>
                     ) : r.status === "running" ? (
                       <span className="shrink-0 text-blue-400">⟳</span>
+                    ) : r.status === "retrying" ? (
+                      <span className="shrink-0 text-amber-500" title={r.error ?? ""}>↻</span>
                     ) : (
                       <span className="shrink-0 text-ink/30">…</span>
                     )}

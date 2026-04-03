@@ -7,6 +7,7 @@ Keeping this as a separate module means the queue technology can be swapped
 (e.g. to Dramatiq or Celery) without touching any business logic.
 """
 import logging
+from datetime import timedelta
 from typing import Callable
 
 from redis import Redis
@@ -35,7 +36,14 @@ def _get_queue(name: str = "images") -> Queue:
     return _queues[name]
 
 
-def enqueue_job(func: Callable, *args, queue: str = "images", job_timeout: int = 600, **kwargs) -> str:
+def enqueue_job(
+    func: Callable,
+    *args,
+    queue: str = "images",
+    job_timeout: int = 600,
+    delay_seconds: int = 0,
+    **kwargs,
+) -> str:
     """
     Enqueue a function for background execution.
 
@@ -50,9 +58,10 @@ def enqueue_job(func: Callable, *args, queue: str = "images", job_timeout: int =
     from rq import Retry
 
     q = _get_queue(queue)
-    job = q.enqueue(
-        func,
-        *args,
+    enqueue_fn = q.enqueue_in if delay_seconds and delay_seconds > 0 else q.enqueue
+    enqueue_args = [timedelta(seconds=delay_seconds), func, *args] if delay_seconds and delay_seconds > 0 else [func, *args]
+    job = enqueue_fn(
+        *enqueue_args,
         **kwargs,
         job_timeout=job_timeout,
         result_ttl=3600,
