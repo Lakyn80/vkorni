@@ -7,12 +7,12 @@ Standalone module — applies decorative memorial frames to portrait images.
 Fonts downloaded into /app/frames/fonts/ by Dockerfile at build time.
 
 Geometry (px):
-    CANVAS_W     800
-    CANVAS_H    1000
+    CANVAS_W     660
+    CANVAS_H     760
     PLATE_H      120
     FRAME_BORDER  30
     ──────────────────
-    portrait area = 700 × 840
+    portrait area = 600 × 700
 
 Usage:
     from app.services.frame_service import compose_portrait
@@ -35,12 +35,12 @@ from app.config import settings
 logger = logging.getLogger(__name__)
 
 # ─── Geometry ─────────────────────────────────────────────────────────────────
-CANVAS_W = 800
-CANVAS_H = 1000
+CANVAS_W = 660
+CANVAS_H = 760
 PLATE_H = 120
 FRAME_BORDER = 30
-PORTRAIT_TARGET_W = 700
-PORTRAIT_TARGET_H = 840
+PORTRAIT_TARGET_W = CANVAS_W - FRAME_BORDER * 2
+PORTRAIT_TARGET_H = CANVAS_H - FRAME_BORDER * 2
 
 FONTS_DIR = os.path.join(settings.frames_dir, "fonts")
 
