@@ -46,6 +46,8 @@ export type Profile = {
   photos: string[];
   photoSources?: Record<string, string>;
   selectedPhoto?: string;
+  framedSourcePhoto?: string | null;
+  frameId?: number | null;
   birth?: string | null;
   death?: string | null;
   loading?: boolean;
@@ -53,4 +55,5 @@ export type Profile = {
   exportState?: ExportState;
   exportMessage?: string;
   framedPhotoUrl?: string | null;
+  framedPreviewVersion?: number | null;
 };

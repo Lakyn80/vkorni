@@ -59,6 +59,61 @@ class ExportRecord(Base):
     created_at = Column(Float, nullable=False)
 
 
+class StoredProfile(Base):
+    __tablename__ = "stored_profiles"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String(255), unique=True, nullable=False, index=True)
+    text = Column(Text, nullable=True)
+    birth = Column(String(255), nullable=True)
+    death = Column(String(255), nullable=True)
+    selected_photo_url = Column(String(1000), nullable=True)
+    selected_source_url = Column(String(1000), nullable=True)
+    framed_image_path = Column(String(1000), nullable=True)
+    frame_id = Column(Integer, nullable=True)
+    attachment_id = Column(Integer, nullable=True, index=True)
+    attachment_url = Column(String(1000), nullable=True)
+    last_thread_id = Column(Integer, nullable=True, index=True)
+    last_thread_url = Column(String(500), nullable=True)
+    status = Column(String(32), nullable=False, index=True)
+    created_at = Column(Float, nullable=False)
+    updated_at = Column(Float, nullable=False)
+    last_exported_at = Column(Float, nullable=False)
+
+    photos = relationship("StoredProfilePhoto", back_populates="stored_profile", cascade="all, delete-orphan")
+    export_attempts = relationship("ProfileExportAttempt", back_populates="stored_profile", cascade="all, delete-orphan")
+
+
+class StoredProfilePhoto(Base):
+    __tablename__ = "stored_profile_photos"
+
+    id = Column(Integer, primary_key=True, index=True)
+    stored_profile_id = Column(Integer, ForeignKey("stored_profiles.id"), nullable=False, index=True)
+    photo_url = Column(String(1000), nullable=False)
+    source_url = Column(String(1000), nullable=True)
+    sort_order = Column(Integer, nullable=False, default=0)
+    is_selected = Column(Integer, nullable=False, default=0)
+
+    stored_profile = relationship("StoredProfile", back_populates="photos")
+
+
+class ProfileExportAttempt(Base):
+    __tablename__ = "profile_export_attempts"
+
+    id = Column(Integer, primary_key=True, index=True)
+    stored_profile_id = Column(Integer, ForeignKey("stored_profiles.id"), nullable=False, index=True)
+    status = Column(String(32), nullable=False, index=True)
+    export_kind = Column(String(32), nullable=False, default="manual")
+    thread_id = Column(Integer, nullable=True, index=True)
+    thread_url = Column(String(500), nullable=True)
+    attachment_id = Column(Integer, nullable=True, index=True)
+    attachment_url = Column(String(1000), nullable=True)
+    error = Column(Text, nullable=True)
+    created_at = Column(Float, nullable=False)
+
+    stored_profile = relationship("StoredProfile", back_populates="export_attempts")
+
+
 def init_db():
     import os
     from passlib.context import CryptContext

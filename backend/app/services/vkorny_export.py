@@ -3,11 +3,14 @@ import os
 import re
 import tempfile
 import time
+from io import BytesIO
 from typing import Iterable
 from urllib.parse import unquote, urlencode, urljoin, urlparse
 
 import requests
+from PIL import Image
 
+from app.config import settings
 from app.services.cache_service import get_biography
 
 logger = logging.getLogger(__name__)
@@ -19,6 +22,10 @@ VKORNI_USER_ID = os.getenv("VKORNI_USER_ID", "1")
 HTTP_RETRY_ATTEMPTS = 3
 HTTP_RETRY_DELAY_SECONDS = 2
 RETRYABLE_STATUS_CODES = {408, 429, 500, 502, 503, 504}
+STATIC_ATTACHMENT_PATH_PREFIX = "/data/attachments/"
+XENFORO_ATTACHMENT_PATH_PREFIX = "/attachments/"
+PRE_FRAMED_PREFIXES = ("/static/accepted_images/", "/static/exported_profiles/")
+INTERNAL_EXPORT_SUBDIR = "xenforo_full"
 
 
 def _headers() -> dict:
@@ -49,9 +56,206 @@ def _absolute_attachment_url(url: str) -> str:
     return urljoin(f"{_vkorni_origin()}/", url)
 
 
+def _normalize_static_attachment_url(url: str) -> str:
+    if not url:
+        return ""
+
+    absolute_url = _absolute_attachment_url(url)
+    if not absolute_url:
+        return ""
+    if not _is_vkorni_url(absolute_url):
+        logger.error("Unexpected attachment host returned by XenForo: %s", absolute_url)
+        return ""
+
+    parsed = urlparse(absolute_url)
+    if not parsed.path.startswith(STATIC_ATTACHMENT_PATH_PREFIX):
+        logger.warning("Ignoring non-static attachment URL returned by XenForo: %s", absolute_url)
+        return ""
+    if parsed.query or parsed.fragment:
+        absolute_url = f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
+    return absolute_url
+
+
+def _sanitize_filename_component(value: str) -> str:
+    cleaned = re.sub(r"[^A-Za-z0-9._-]+", "_", value or "").strip("._")
+    return cleaned or "image"
+
+
+def _guess_extension(filename: str | None, image: Image.Image) -> str:
+    _, ext = os.path.splitext(filename or "")
+    ext = ext.lower()
+    if ext in {".jpg", ".jpeg", ".png", ".webp"}:
+        return ".jpg" if ext == ".jpeg" else ext
+
+    image_format = (image.format or "").lower()
+    if image_format in {"jpeg", "jpg"}:
+        return ".jpg"
+    if image_format in {"png", "webp"}:
+        return f".{image_format}"
+    return ".jpg"
+
+
+def _build_internal_image_local_path(attachment_id: int, filename: str | None, image: Image.Image) -> str:
+    safe_stem = _sanitize_filename_component(os.path.splitext(filename or "")[0])
+    ext = _guess_extension(filename, image)
+    target_dir = os.path.join(settings.exported_profiles_dir, INTERNAL_EXPORT_SUBDIR)
+    os.makedirs(target_dir, exist_ok=True)
+    return os.path.join(target_dir, f"{attachment_id}-{safe_stem}{ext}")
+
+
+def _build_internal_image_public_url(local_path: str) -> str | None:
+    if not settings.backend_public_url:
+        logger.error("BACKEND_PUBLIC_URL is not set; cannot publish stable internal export image")
+        return None
+
+    normalized_root = os.path.normpath(settings.exported_profiles_dir)
+    normalized_path = os.path.normpath(local_path)
+    if not normalized_path.startswith(normalized_root):
+        logger.error("Stable internal export image path is outside exported_profiles_dir: %s", local_path)
+        return None
+
+    rel = os.path.relpath(normalized_path, "/app").replace("\\", "/")
+    return f"{settings.backend_public_url}/{rel}"
+
+
+def _detect_full_size_source(attachment: dict) -> dict | None:
+    direct_url = _absolute_attachment_url(attachment.get("direct_url") or "")
+    if not direct_url:
+        logger.error("XenForo attachment response missing direct_url for full-size export image")
+        return None
+    if not _is_vkorni_url(direct_url):
+        logger.error("Unexpected XenForo direct_url host: %s", direct_url)
+        return None
+
+    parsed = urlparse(direct_url)
+    if parsed.path.startswith(STATIC_ATTACHMENT_PATH_PREFIX):
+        logger.error("Rejected static attachment path as full-size source: %s", direct_url)
+        return None
+    if not parsed.path.startswith(XENFORO_ATTACHMENT_PATH_PREFIX):
+        logger.error("Rejected non-attachment direct_url for full-size source: %s", direct_url)
+        return None
+
+    width = int(attachment.get("width") or 0)
+    height = int(attachment.get("height") or 0)
+    if width <= 0 or height <= 0:
+        logger.error("XenForo attachment response missing valid dimensions for attachment_id=%s", attachment.get("attachment_id"))
+        return None
+
+    logger.info(
+        "Detected full-size XenForo source attachment_id=%s width=%s height=%s url=%s",
+        attachment.get("attachment_id"),
+        width,
+        height,
+        direct_url,
+    )
+    return {
+        "download_url": direct_url,
+        "filename": attachment.get("filename") or "",
+        "width": width,
+        "height": height,
+    }
+
+
+def _download_and_store_internal_image(*, attachment_id: int, source: dict) -> dict | None:
+    download_url = source["download_url"]
+    response = None
+    for attempt in range(1, HTTP_RETRY_ATTEMPTS + 1):
+        try:
+            response = requests.get(download_url, timeout=30)
+        except requests.RequestException:
+            if attempt == HTTP_RETRY_ATTEMPTS:
+                logger.exception("Failed to download XenForo full-size image attachment_id=%s", attachment_id)
+                return None
+            logger.warning(
+                "Full-size XenForo download request failed for attachment_id=%s, retry %d/%d",
+                attachment_id,
+                attempt,
+                HTTP_RETRY_ATTEMPTS,
+            )
+            _sleep_before_retry(attempt)
+            continue
+
+        if response.ok:
+            break
+
+        if attempt < HTTP_RETRY_ATTEMPTS and _should_retry_response(response.status_code):
+            logger.warning(
+                "Full-size XenForo download returned %s for attachment_id=%s, retry %d/%d",
+                response.status_code,
+                attachment_id,
+                attempt,
+                HTTP_RETRY_ATTEMPTS,
+            )
+            _sleep_before_retry(attempt)
+            continue
+
+        logger.error("Full-size XenForo download failed: %s attachment_id=%s", response.status_code, attachment_id)
+        return None
+
+    if not response or not response.ok:
+        logger.error("Full-size XenForo download failed without usable response attachment_id=%s", attachment_id)
+        return None
+
+    content_type = (response.headers.get("content-type") or "").lower()
+    if not content_type.startswith("image/"):
+        logger.error("Rejected non-image full-size XenForo response attachment_id=%s content_type=%s", attachment_id, content_type)
+        return None
+
+    try:
+        image = Image.open(BytesIO(response.content))
+        image.load()
+    except Exception:
+        logger.exception("Failed to decode downloaded XenForo full-size image attachment_id=%s", attachment_id)
+        return None
+
+    expected_width = int(source["width"])
+    expected_height = int(source["height"])
+    if image.width < expected_width or image.height < expected_height:
+        logger.error(
+            "Rejected downloaded XenForo image attachment_id=%s because it looks like a thumbnail: expected=%sx%s actual=%sx%s",
+            attachment_id,
+            expected_width,
+            expected_height,
+            image.width,
+            image.height,
+        )
+        return None
+
+    logger.info(
+        "Downloaded full-size XenForo image attachment_id=%s actual=%sx%s",
+        attachment_id,
+        image.width,
+        image.height,
+    )
+
+    local_path = _build_internal_image_local_path(attachment_id, source.get("filename"), image)
+    public_url = _build_internal_image_public_url(local_path)
+    if not public_url:
+        return None
+
+    temp_path = f"{local_path}.tmp"
+    try:
+        with open(temp_path, "wb") as handle:
+            handle.write(response.content)
+        os.replace(temp_path, local_path)
+    finally:
+        if os.path.exists(temp_path):
+            try:
+                os.remove(temp_path)
+            except OSError:
+                logger.warning("Failed to remove temporary internal export image: %s", temp_path)
+
+    logger.info("Stored internal export image attachment_id=%s path=%s url=%s", attachment_id, local_path, public_url)
+    return {"local_path": local_path, "public_url": public_url}
+
+
 def _is_remote_image_url(url: str) -> bool:
     parsed = urlparse(url)
     return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
+
+
+def _is_pre_framed_local_url(url: str) -> bool:
+    return any(url.startswith(prefix) for prefix in PRE_FRAMED_PREFIXES)
 
 
 def _sleep_before_retry(attempt: int) -> None:
@@ -150,14 +354,15 @@ def _upload_attachment(file_path: str) -> dict | None:
             logger.error("XenForo attachment response missing attachment_id")
             return None
 
-        raw_view_url = att.get("direct_url") or att.get("thumbnail_url") or ""
-        view_url = _absolute_attachment_url(raw_view_url)
-        if view_url and not _is_vkorni_url(view_url):
-            logger.error("Unexpected attachment host returned by XenForo: %s", view_url)
-            view_url = ""
+        full_size_source = _detect_full_size_source(att)
+        if not full_size_source:
+            return None
 
-        logger.info("Uploaded attachment id=%s url=%s for %s", attachment_id, view_url, filename)
-        return {"attachment_id": attachment_id, "view_url": view_url}
+        logger.info("Attachment upload success attachment_id=%s filename=%s", attachment_id, filename)
+        return {
+            "attachment_id": attachment_id,
+            "full_size_source": full_size_source,
+        }
     except Exception:
         logger.exception("XenForo attachment upload error")
         return None
@@ -170,13 +375,11 @@ def _build_message(
     death: str | None = None,
     attachment_url: str | None = None,
 ) -> str:
-    parts = []
+    if not attachment_url:
+        raise ValueError("Stable internal image URL is required for final post render")
 
-    if attachment_url:
-        parts.append(f"[CENTER][IMG]{attachment_url}[/IMG][/CENTER]")
-    else:
-        for attachment_id in attachment_ids[:1]:
-            parts.append(f"[CENTER][ATTACH=full]{attachment_id}[/ATTACH][/CENTER]")
+    parts = []
+    parts.append(f"[CENTER][IMG]{attachment_url}[/IMG][/CENTER]")
 
     if parts:
         parts.append("")
@@ -269,11 +472,15 @@ def _prepare_export_photo(
     birth: str | None,
     death: str | None,
     photo_source_url: str | None,
+    frame_id: int | None = None,
 ) -> dict | None:
+    from app.services.frame_service import compose_portrait, extract_frame_id, resolve_frame_id
+
     photo_list = list(photos) if photos else []
     cleanup_paths: list[str] = []
     source_local_path: str | None = None
     source_photo_path: str | None = None
+    selected_photo_url: str | None = None
     image_origin: str | None = None
     resolved_source_url = photo_source_url
     accepted_local_candidates: list[tuple[str, str]] = []
@@ -296,7 +503,7 @@ def _prepare_export_photo(
             continue
         local = _local_path(photo_url)
         if os.path.exists(local):
-            if "accepted_images" in photo_url:
+            if _is_pre_framed_local_url(photo_url):
                 accepted_local_candidates.append((local, photo_url))
             else:
                 local_candidates.append((local, photo_url))
@@ -305,9 +512,11 @@ def _prepare_export_photo(
 
     if accepted_local_candidates:
         source_local_path, source_photo_path = accepted_local_candidates[0]
-        image_origin = "accepted_local"
+        selected_photo_url = source_photo_path
+        image_origin = "exported_local" if source_photo_path.startswith("/static/exported_profiles/") else "accepted_local"
     elif local_candidates:
         source_local_path, source_photo_path = local_candidates[0]
+        selected_photo_url = source_photo_path
         image_origin = "photo_local"
 
     if source_local_path is None:
@@ -318,6 +527,7 @@ def _prepare_export_photo(
             cleanup_paths.append(downloaded)
             source_local_path = downloaded
             resolved_source_url = remote_url
+            selected_photo_url = remote_url
             image_origin = "photo_source_download"
             break
 
@@ -325,11 +535,11 @@ def _prepare_export_photo(
         return None
 
     export_path = source_local_path
-    if image_origin != "accepted_local":
+    resolved_frame_id = frame_id
+    if image_origin not in {"accepted_local", "exported_local"}:
         try:
-            from app.services.frame_service import compose_portrait
-
-            export_path = compose_portrait(source_local_path, birth=birth, death=death)
+            resolved_frame_id = resolve_frame_id(selected_photo_url or source_local_path, frame_id)
+            export_path = compose_portrait(source_local_path, birth=birth, death=death, frame_id=resolved_frame_id)
             if image_origin == "photo_local":
                 image_origin = "framed_local"
             elif image_origin == "photo_source_download":
@@ -340,13 +550,17 @@ def _prepare_export_photo(
                 image_origin = "raw_local"
             elif image_origin == "photo_source_download":
                 image_origin = "raw_source_download"
+    else:
+        resolved_frame_id = frame_id if frame_id is not None else extract_frame_id(source_photo_path or source_local_path)
 
     return {
         "export_path": export_path,
         "cleanup_paths": cleanup_paths,
+        "selected_photo_url": selected_photo_url,
         "source_photo_path": source_photo_path,
         "source_photo_url": resolved_source_url,
         "image_origin": image_origin,
+        "frame_id": resolved_frame_id,
     }
 
 
@@ -410,6 +624,8 @@ def send_profile(
     birth: str | None = None,
     death: str | None = None,
     photo_source_url: str | None = None,
+    frame_id: int | None = None,
+    preferred_source_photo_url: str | None = None,
 ) -> dict:
     photo_list = list(photos) if photos else []
 
@@ -422,7 +638,7 @@ def send_profile(
         birth = _extract_birth_from_text(text)
 
     resolved_photo_source_url = _resolve_cached_source_url(name, photo_list, photo_source_url)
-    prepared = _prepare_export_photo(photo_list, birth, death, resolved_photo_source_url)
+    prepared = _prepare_export_photo(photo_list, birth, death, resolved_photo_source_url, frame_id=frame_id)
     if not prepared:
         return _error_result(
             "No exportable photo found for static XenForo upload",
@@ -439,10 +655,35 @@ def send_profile(
                 source_photo_path=prepared.get("source_photo_path"),
                 source_photo_url=prepared.get("source_photo_url"),
                 image_origin=prepared.get("image_origin"),
+                selected_photo_url=preferred_source_photo_url or prepared.get("selected_photo_url"),
+                export_path=prepared.get("export_path"),
+                frame_id=prepared.get("frame_id"),
             )
 
         attachment_id = upload["attachment_id"]
-        attachment_url = upload.get("view_url") or None
+        stored_image = _download_and_store_internal_image(
+            attachment_id=attachment_id,
+            source=upload["full_size_source"],
+        )
+        if not stored_image:
+            logger.error("Failed to persist full-size XenForo image attachment_id=%s", attachment_id)
+            return _error_result(
+                "Failed to persist full-size export image; thread was not created",
+                attachment_id=attachment_id,
+                source_photo_path=prepared.get("source_photo_path"),
+                source_photo_url=prepared.get("source_photo_url"),
+                image_origin=prepared.get("image_origin"),
+                selected_photo_url=preferred_source_photo_url or prepared.get("selected_photo_url"),
+                export_path=prepared.get("export_path"),
+                frame_id=prepared.get("frame_id"),
+            )
+
+        attachment_url = stored_image["public_url"]
+        stable_image_path = stored_image["local_path"]
+        exported_selected_photo_url = prepared.get("selected_photo_url")
+        if preferred_source_photo_url and exported_selected_photo_url == photo_list[0]:
+            exported_selected_photo_url = preferred_source_photo_url
+        logger.info("Final post image source selected attachment_id=%s url=%s", attachment_id, attachment_url)
         message = _build_message(
             text,
             [attachment_id],
@@ -460,6 +701,10 @@ def send_profile(
                     "source_photo_path": prepared.get("source_photo_path"),
                     "source_photo_url": prepared.get("source_photo_url"),
                     "image_origin": prepared.get("image_origin"),
+                    "selected_photo_url": exported_selected_photo_url,
+                    "export_path": prepared.get("export_path"),
+                    "frame_id": prepared.get("frame_id"),
+                    "stable_image_path": stable_image_path,
                 }
             )
             return result
@@ -471,6 +716,10 @@ def send_profile(
                 "source_photo_path": prepared.get("source_photo_path"),
                 "source_photo_url": prepared.get("source_photo_url"),
                 "image_origin": prepared.get("image_origin"),
+                "selected_photo_url": exported_selected_photo_url,
+                "export_path": prepared.get("export_path"),
+                "frame_id": prepared.get("frame_id"),
+                "stable_image_path": stable_image_path,
             }
         )
         return result
@@ -481,6 +730,9 @@ def send_profile(
             source_photo_path=prepared.get("source_photo_path"),
             source_photo_url=prepared.get("source_photo_url"),
             image_origin=prepared.get("image_origin"),
+            selected_photo_url=preferred_source_photo_url or prepared.get("selected_photo_url"),
+            export_path=prepared.get("export_path"),
+            frame_id=prepared.get("frame_id"),
         )
     finally:
         for path in prepared.get("cleanup_paths", []):

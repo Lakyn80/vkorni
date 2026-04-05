@@ -68,6 +68,7 @@ class FrameRequest(BaseModel):
     photo_url: str          # relative URL like /static/photos/.../file.webp
     birth: str | None = None
     death: str | None = None
+    frame_id: int | None = None
 
 
 @router.post("/frame")
@@ -79,11 +80,13 @@ def generate_frame(payload: FrameRequest):
         raise HTTPException(status_code=404, detail=f"Photo not found: {payload.photo_url}")
 
     try:
-        from app.services.frame_service import compose_portrait
-        framed = compose_portrait(local, birth=payload.birth, death=payload.death)
+        from app.services.frame_service import compose_portrait, resolve_frame_id
+
+        frame_id = resolve_frame_id(payload.photo_url, payload.frame_id)
+        framed = compose_portrait(local, birth=payload.birth, death=payload.death, frame_id=frame_id)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
 
     # framed is absolute path like /app/static/accepted_images/foo_frame3.jpg
     rel = os.path.relpath(framed, "/app").replace("\\", "/")
-    return json_response({"url": f"/{rel}"})
+    return json_response({"url": f"/{rel}", "frame_id": frame_id})

@@ -7,11 +7,12 @@ Standalone module — applies decorative memorial frames to portrait images.
 Fonts downloaded into /app/frames/fonts/ by Dockerfile at build time.
 
 Geometry (px):
-    PHOTO_SIZE  512 × 512   (same as center_face_in_image output)
-    BORDER       50          left / right / top padding
-    PLATE_H      90          date plate at the bottom
+    CANVAS_W     800
+    CANVAS_H    1000
+    PLATE_H      120
+    FRAME_BORDER  30
     ──────────────────
-    OUTPUT       612 × 652   total canvas
+    portrait area = 740 × 940
 
 Usage:
     from app.services.frame_service import compose_portrait
@@ -22,20 +23,22 @@ Usage:
 import logging
 import os
 import random
+import re
+from hashlib import sha256
 from pathlib import Path
 from typing import Optional
 
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFont, ImageOps
 
 from app.config import settings
 
 logger = logging.getLogger(__name__)
 
 # ─── Geometry ─────────────────────────────────────────────────────────────────
-PHOTO_SIZE = 512
-BORDER     = 50
-OUTPUT_W   = PHOTO_SIZE + BORDER * 2   # 612
-OUTPUT_H   = PHOTO_SIZE + BORDER * 2   # 612
+CANVAS_W = 800
+CANVAS_H = 1000
+PLATE_H = 120
+FRAME_BORDER = 30
 
 FONTS_DIR = os.path.join(settings.frames_dir, "fonts")
 
@@ -50,8 +53,8 @@ _FALLBACK_FONTS = [
 # bg           canvas background (RGB)
 # outer        outer border stroke color
 # inner        inner border stroke color (thinner, tight around photo)
-# plate_bg     date plate fill
-# text_color   date text color
+# plate_bg     kept for backward-compatible style definitions
+# text_color   kept for backward-compatible style definitions
 # font_file    TTF filename in FONTS_DIR
 # bw           outer border stroke width (px)
 # deco         True → add Art Deco extra hairline + side ticks
@@ -110,6 +113,33 @@ STYLES: list[dict] = [
 
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
+
+_FRAME_SUFFIX_RE = re.compile(r"_frame(\d+)\.(?:jpg|jpeg|png|webp)$", re.IGNORECASE)
+
+
+def extract_frame_id(value: str | None) -> int | None:
+    if not value:
+        return None
+    match = _FRAME_SUFFIX_RE.search(value)
+    if not match:
+        return None
+    return int(match.group(1)) % len(STYLES)
+
+
+def resolve_frame_id(source_key: str | None, frame_id: Optional[int] = None) -> int:
+    if frame_id is not None:
+        return int(frame_id) % len(STYLES)
+
+    embedded = extract_frame_id(source_key)
+    if embedded is not None:
+        return embedded
+
+    if not source_key:
+        return random.randint(0, len(STYLES) - 1)
+
+    digest = sha256(source_key.encode("utf-8")).digest()
+    return int.from_bytes(digest[:4], "big") % len(STYLES)
+
 
 def _load_font(font_file: str, size: int) -> ImageFont.FreeTypeFont:
     path = os.path.join(FONTS_DIR, font_file)
@@ -179,16 +209,49 @@ def _compose(
     # ── 1. Load & resize source ───────────────────────────────────────────────
     with Image.open(source_path) as src:
         src = src.convert("RGB")
-        src = src.resize((PHOTO_SIZE, PHOTO_SIZE), Image.LANCZOS)
+        portrait_h = CANVAS_H
+        portrait_area = (CANVAS_W - FRAME_BORDER * 2, portrait_h - FRAME_BORDER * 2)
+        src = ImageOps.fit(src, portrait_area, Image.LANCZOS)
 
     # ── 2. Canvas ─────────────────────────────────────────────────────────────
-    canvas = Image.new("RGB", (OUTPUT_W, OUTPUT_H), s["bg"])
+    canvas = Image.new("RGB", (CANVAS_W, CANVAS_H), s["bg"])
     draw   = ImageDraw.Draw(canvas)
 
-    px, py = BORDER, BORDER          # photo top-left corner
+    px = FRAME_BORDER
+    py = FRAME_BORDER
     canvas.paste(src, (px, py))
 
-    # ── 3. Save ───────────────────────────────────────────────────────────────
+    # ── 3. Outer thick border ─────────────────────────────────────────────────
+    pad_out = bw * 2
+    r_out = [px - pad_out, py - pad_out,
+             px + src.width + pad_out - 1, py + src.height + pad_out - 1]
+    draw.rectangle(r_out, outline=s["outer"], width=bw)
+
+    # ── 4. Inner thin border (tight around photo) ─────────────────────────────
+    thin = max(1, bw // 2)
+    pad_in = thin * 2
+    r_in = [px - pad_in, py - pad_in,
+            px + src.width + pad_in - 1, py + src.height + pad_in - 1]
+    draw.rectangle(r_in, outline=s["inner"], width=thin)
+
+    # ── 5. Corner diamond ornaments ───────────────────────────────────────────
+    cr = max(7, bw + 3)
+    for cx, cy in [(r_out[0], r_out[1]), (r_out[2], r_out[1]),
+                   (r_out[0], r_out[3]), (r_out[2], r_out[3])]:
+        _diamond(draw, cx, cy, cr, s["outer"])
+
+    # ── 6. Art Deco extra hairline + side ticks ───────────────────────────────
+    if s.get("deco"):
+        gap = 14
+        r_d = [r_out[0] - gap, r_out[1] - gap,
+               r_out[2] + gap, r_out[3] + gap]
+        draw.rectangle(r_d, outline=s["outer"], width=1)
+        mid_y = (r_d[1] + r_d[3]) // 2
+        for side_x in (r_d[0], r_d[2]):
+            draw.line([(side_x, mid_y - 8), (side_x, mid_y + 8)],
+                      fill=s["outer"], width=2)
+
+    # ── 7. Save ───────────────────────────────────────────────────────────────
     os.makedirs(settings.accepted_dir, exist_ok=True)
     stem     = Path(source_path).stem
     out_path = os.path.join(settings.accepted_dir, f"{stem}_frame{frame_id}.jpg")

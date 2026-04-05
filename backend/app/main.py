@@ -29,6 +29,7 @@ for env_var, mount_path, name in [
     ("PHOTOS_DIR",         "/static/photos",          "photos"),
     ("IMAGE_ACCEPTED_DIR", "/static/accepted_images", "accepted_images"),
     ("IMAGE_REJECTED_DIR", "/static/rejected_images", "rejected_images"),
+    ("EXPORTED_PROFILES_DIR", "/static/exported_profiles", "exported_profiles"),
 ]:
     directory = os.getenv(env_var, f"/app/static/{name}")
     os.makedirs(directory, exist_ok=True)

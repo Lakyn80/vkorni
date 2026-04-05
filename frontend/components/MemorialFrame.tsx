@@ -12,7 +12,7 @@ type Props = {
 
 export function MemorialFrame({ profile, onDrop }: Props) {
   const framedUrl = profile.framedPhotoUrl
-    ? `${API_BASE}${profile.framedPhotoUrl}`
+    ? `${API_BASE}${profile.framedPhotoUrl}${profile.framedPreviewVersion ? `?v=${profile.framedPreviewVersion}` : ""}`
     : null;
 
   return (

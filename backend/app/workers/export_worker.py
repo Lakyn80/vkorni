@@ -107,6 +107,8 @@ def run_bulk_export_item(export_id: str, name: str) -> None:
             death=cached.get("death"),
             photo_source_url=photo_source_url,
             export_kind="bulk",
+            selected_photo_url=photos[0] if photos else None,
+            photo_sources=photo_sources,
         )
 
         if result.get("status") == "OK":

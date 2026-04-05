@@ -5,6 +5,7 @@ services:
       - backend_photos:/app/static/photos
       - backend_accepted_images:/app/static/accepted_images
       - backend_rejected_images:/app/static/rejected_images
+      - backend_exported_profiles:/app/static/exported_profiles
       - backend_data:/app/app/data
       - backend_chroma:/app/chroma_data
     ports:
@@ -22,6 +23,7 @@ services:
       - backend_photos:/app/static/photos
       - backend_accepted_images:/app/static/accepted_images
       - backend_rejected_images:/app/static/rejected_images
+      - backend_exported_profiles:/app/static/exported_profiles
       - backend_data:/app/app/data
       - backend_chroma:/app/chroma_data
     depends_on:
@@ -49,5 +51,6 @@ volumes:
   backend_photos:
   backend_accepted_images:
   backend_rejected_images:
+  backend_exported_profiles:
   backend_data:
   backend_chroma:

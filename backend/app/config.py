@@ -25,6 +25,7 @@ class Settings:
     photos_dir: str       = os.getenv("PHOTOS_DIR", "/app/static/photos")
     accepted_dir: str     = os.getenv("IMAGE_ACCEPTED_DIR", "/app/static/accepted_images")
     rejected_dir: str     = os.getenv("IMAGE_REJECTED_DIR", "/app/static/rejected_images")
+    exported_profiles_dir: str = os.getenv("EXPORTED_PROFILES_DIR", "/app/static/exported_profiles")
     batch_size: int       = int(os.getenv("IMAGE_BATCH_SIZE", "2"))
 
     # Frame assets (relative to backend root)

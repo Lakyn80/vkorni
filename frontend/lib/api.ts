@@ -49,24 +49,25 @@ export const api = {
     );
   },
 
-  frame(photoUrl: string, birth: string | null, death: string | null) {
-    return request<{ url: string }>(
+  frame(photoUrl: string, birth: string | null, death: string | null, frameId?: number | null) {
+    return request<{ url: string; frame_id: number }>(
       `${API_BASE}/api/frame`,
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ photo_url: photoUrl, birth, death }),
+        body: JSON.stringify({ photo_url: photoUrl, birth, death, frame_id: frameId ?? null }),
       }
     );
   },
 
-  export(profile: Pick<Profile, "name" | "text" | "photos" | "photoSources" | "selectedPhoto" | "birth" | "death" | "framedPhotoUrl">) {
-    const framedPhoto = profile.framedPhotoUrl || null;
+  export(profile: Pick<Profile, "name" | "text" | "photos" | "photoSources" | "selectedPhoto" | "birth" | "death" | "framedPhotoUrl" | "framedSourcePhoto" | "frameId">) {
     const photo = profile.selectedPhoto || profile.photos[0] || null;
     const mappedPhotoSource = photo && profile.photoSources ? (profile.photoSources[photo] ?? null) : null;
     const directPhotoSource = isAbsoluteUrl(photo) ? photo : null;
-    // Always pass the original source as backup. Backend prefers the local framed file,
-    // but can re-download the source if an older cached local file is missing.
+    const framedPhoto =
+      profile.framedPhotoUrl && profile.framedSourcePhoto === photo
+        ? profile.framedPhotoUrl
+        : null;
     const photoSourceUrl = mappedPhotoSource ?? directPhotoSource;
     return request<{ status: string; error?: string; url?: string }>(
       `${API_BASE}/api/export`,
@@ -76,10 +77,15 @@ export const api = {
         body: JSON.stringify({
           name: profile.name,
           text: profile.text,
-          photos: framedPhoto ? [framedPhoto] : (photo ? [photo] : []),
+          photos: profile.photos,
           birth: profile.birth ?? null,
           death: profile.death ?? null,
           photo_source_url: photoSourceUrl,
+          selected_photo: photo,
+          photo_sources: profile.photoSources ?? {},
+          framed_photo_url: framedPhoto,
+          framed_source_photo: profile.framedSourcePhoto ?? null,
+          frame_id: profile.frameId ?? null,
         }),
       }
     );

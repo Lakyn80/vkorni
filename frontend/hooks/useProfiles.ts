@@ -21,20 +21,37 @@ export function useProfiles(onNameResolved: (name: string) => void) {
     setProfiles((prev) => prev.map((p) => (p.id === id ? { ...p, ...patch } : p)));
   }, []);
 
-  // Generate memorial frame in background after profile loads
   const applyFrame = useCallback(
-    async (profileId: string, photo: string, birth: string | null, death: string | null) => {
+    async (
+      profileId: string,
+      photo: string,
+      birth: string | null,
+      death: string | null,
+      existingFrameId?: number | null
+    ) => {
       if (!photo) return;
       try {
-        const result = await api.frame(photo, birth, death);
+        const result = await api.frame(photo, birth, death, existingFrameId ?? null);
         if (result.url) {
-          updateProfile(profileId, { framedPhotoUrl: result.url });
+          setProfiles((prev) =>
+            prev.map((profile) => {
+              if (profile.id !== profileId) return profile;
+              if (profile.selectedPhoto !== photo) return profile;
+              return {
+                ...profile,
+                framedPhotoUrl: result.url,
+                framedPreviewVersion: Date.now(),
+                framedSourcePhoto: photo,
+                frameId: result.frame_id,
+              };
+            })
+          );
         }
       } catch {
         // Frame generation is best-effort — silently ignore errors
       }
     },
-    [updateProfile]
+    []
   );
 
   const generate = useCallback(
@@ -54,17 +71,21 @@ export function useProfiles(onNameResolved: (name: string) => void) {
           photos,
           photoSources: data.photo_sources ?? {},
           selectedPhoto: photos[0] || "",
+          framedSourcePhoto: null,
+          frameId: null,
           birth: data.birth ?? null,
           death: data.death ?? null,
           loading: false,
           error: "",
           exportState: "idle",
           framedPhotoUrl: null,
+          framedPreviewVersion: null,
         };
         setProfiles([profile]);
         onNameResolved(data.name || name);
-        // Generate frame in background
-        if (photos[0]) applyFrame(draft.id, photos[0], data.birth ?? null, data.death ?? null);
+        if (photos[0]) {
+          applyFrame(draft.id, photos[0], data.birth ?? null, data.death ?? null, null);
+        }
       } catch (err) {
         setProfiles([
           {
@@ -80,44 +101,51 @@ export function useProfiles(onNameResolved: (name: string) => void) {
     [onNameResolved, applyFrame]
   );
 
-  const loadCached = useCallback(async (name: string) => {
-    if (!name) return;
-    setLoadingCached(true);
-    const draft = loadingProfile(name);
-    setProfiles([draft]);
+  const loadCached = useCallback(
+    async (name: string) => {
+      if (!name) return;
+      setLoadingCached(true);
+      const draft = loadingProfile(name);
+      setProfiles([draft]);
 
-    try {
-      const data = await api.getCachedProfile(name);
-      const photos = Array.isArray(data.photos) ? data.photos : [];
-      const profile: Profile = {
-        id: draft.id,
-        name: data.name || name,
-        text: data.text || "",
-        photos,
-        photoSources: data.photo_sources ?? {},
-        selectedPhoto: photos[0] || "",
-        birth: data.birth ?? null,
-        death: data.death ?? null,
-        loading: false,
-        error: "",
-        exportState: "idle",
-        framedPhotoUrl: null,
-      };
-      setProfiles([profile]);
-      // Generate frame in background
-      if (photos[0]) applyFrame(draft.id, photos[0], data.birth ?? null, data.death ?? null);
-    } catch (err) {
-      setProfiles([
-        {
-          ...draft,
+      try {
+        const data = await api.getCachedProfile(name);
+        const photos = Array.isArray(data.photos) ? data.photos : [];
+        const profile: Profile = {
+          id: draft.id,
+          name: data.name || name,
+          text: data.text || "",
+          photos,
+          photoSources: data.photo_sources ?? {},
+          selectedPhoto: photos[0] || "",
+          framedSourcePhoto: null,
+          frameId: null,
+          birth: data.birth ?? null,
+          death: data.death ?? null,
           loading: false,
-          error: err instanceof Error ? err.message : "Ошибка загрузки профиля",
-        },
-      ]);
-    } finally {
-      setLoadingCached(false);
-    }
-  }, [applyFrame]);
+          error: "",
+          exportState: "idle",
+          framedPhotoUrl: null,
+          framedPreviewVersion: null,
+        };
+        setProfiles([profile]);
+        if (photos[0]) {
+          applyFrame(draft.id, photos[0], data.birth ?? null, data.death ?? null, null);
+        }
+      } catch (err) {
+        setProfiles([
+          {
+            ...draft,
+            loading: false,
+            error: err instanceof Error ? err.message : "Ошибка загрузки профиля",
+          },
+        ]);
+      } finally {
+        setLoadingCached(false);
+      }
+    },
+    [applyFrame]
+  );
 
   const regenerate = useCallback(
     async (profile: Profile) => {
@@ -125,17 +153,23 @@ export function useProfiles(onNameResolved: (name: string) => void) {
         await api.deleteCache(profile.name);
         const data = await api.generate(profile.name, true);
         const photos = Array.isArray(data.photos) ? data.photos : [];
+        const nextSelectedPhoto = photos[0] || profile.selectedPhoto || "";
         updateProfile(profile.id, {
           text: data.text || "",
           photos,
           photoSources: data.photo_sources ?? {},
-          selectedPhoto: photos[0] || profile.selectedPhoto || "",
+          selectedPhoto: nextSelectedPhoto,
+          framedSourcePhoto: null,
+          frameId: null,
           birth: data.birth ?? null,
           death: data.death ?? null,
           framedPhotoUrl: null,
+          framedPreviewVersion: null,
           error: "",
         });
-        if (photos[0]) applyFrame(profile.id, photos[0], data.birth ?? null, data.death ?? null);
+        if (nextSelectedPhoto) {
+          applyFrame(profile.id, nextSelectedPhoto, data.birth ?? null, data.death ?? null, null);
+        }
       } catch (err) {
         updateProfile(profile.id, {
           error: err instanceof Error ? err.message : "Ошибка обновления",
@@ -174,10 +208,16 @@ export function useProfiles(onNameResolved: (name: string) => void) {
       try {
         const result = await api.uploadPhoto(profile.name, file);
         if (result.url) {
+          const nextPhotos = [result.url, ...profile.photos.filter((photo) => photo !== result.url)];
           updateProfile(profile.id, {
-            photos: [result.url, ...profile.photos],
+            photos: nextPhotos,
             selectedPhoto: result.url,
+            framedPhotoUrl: null,
+            framedPreviewVersion: null,
+            framedSourcePhoto: null,
+            frameId: null,
           });
+          applyFrame(profile.id, result.url, profile.birth ?? null, profile.death ?? null, null);
         }
       } catch (err) {
         updateProfile(profile.id, {
@@ -185,14 +225,32 @@ export function useProfiles(onNameResolved: (name: string) => void) {
         });
       }
     },
-    [updateProfile]
+    [applyFrame, updateProfile]
   );
 
   const selectPhoto = useCallback(
     (profileId: string, photo: string) => {
-      updateProfile(profileId, { selectedPhoto: photo });
+      const currentProfile = profiles.find((profile) => profile.id === profileId);
+      const nextBirth = currentProfile?.birth ?? null;
+      const nextDeath = currentProfile?.death ?? null;
+
+      setProfiles((prev) =>
+        prev.map((profile) => {
+          if (profile.id !== profileId) return profile;
+          return {
+            ...profile,
+            selectedPhoto: photo,
+            framedPhotoUrl: null,
+            framedPreviewVersion: null,
+            framedSourcePhoto: null,
+            frameId: null,
+          };
+        })
+      );
+
+      applyFrame(profileId, photo, nextBirth, nextDeath, null);
     },
-    [updateProfile]
+    [applyFrame, profiles]
   );
 
   return {
