@@ -1,3 +1,4 @@
+import mimetypes
 import os
 
 from fastapi import FastAPI
@@ -13,6 +14,8 @@ from app.api.styles import router as styles_router
 from app.api.admin import router as admin_router
 
 init_db()
+
+mimetypes.add_type("image/webp", ".webp")
 
 app = FastAPI(title="VKorni API")
 
