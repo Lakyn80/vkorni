@@ -12,7 +12,7 @@ Geometry (px):
     PLATE_H      120
     FRAME_BORDER  30
     ──────────────────
-    portrait area = 600 × 700
+    portrait area = 560 × 620
 
 Usage:
     from app.services.frame_service import compose_portrait
@@ -39,8 +39,8 @@ CANVAS_W = 660
 CANVAS_H = 760
 PLATE_H = 120
 FRAME_BORDER = 30
-PORTRAIT_TARGET_W = CANVAS_W - FRAME_BORDER * 2
-PORTRAIT_TARGET_H = CANVAS_H - FRAME_BORDER * 2
+PORTRAIT_TARGET_W = 560
+PORTRAIT_TARGET_H = 620
 
 FONTS_DIR = os.path.join(settings.frames_dir, "fonts")
 
@@ -215,44 +215,21 @@ def _compose(
         src = ImageOps.fit(src, portrait_area, Image.LANCZOS)
 
     # ── 2. Canvas ─────────────────────────────────────────────────────────────
-    canvas = Image.new("RGB", (CANVAS_W, CANVAS_H), s["bg"])
+    canvas = Image.new("RGB", (CANVAS_W, CANVAS_H), (245, 245, 245))
     draw   = ImageDraw.Draw(canvas)
 
     px = (CANVAS_W - src.width) // 2
     py = (CANVAS_H - src.height) // 2
     canvas.paste(src, (px, py))
 
-    # ── 3. Outer thick border ─────────────────────────────────────────────────
-    pad_out = bw * 2
-    r_out = [px - pad_out, py - pad_out,
-             px + src.width + pad_out - 1, py + src.height + pad_out - 1]
-    draw.rectangle(r_out, outline=s["outer"], width=bw)
-
-    # ── 4. Inner thin border (tight around photo) ─────────────────────────────
+    # ── 3. Simple photo outline ───────────────────────────────────────────────
     thin = max(1, bw // 2)
     pad_in = thin * 2
     r_in = [px - pad_in, py - pad_in,
             px + src.width + pad_in - 1, py + src.height + pad_in - 1]
     draw.rectangle(r_in, outline=s["inner"], width=thin)
 
-    # ── 5. Corner diamond ornaments ───────────────────────────────────────────
-    cr = max(7, bw + 3)
-    for cx, cy in [(r_out[0], r_out[1]), (r_out[2], r_out[1]),
-                   (r_out[0], r_out[3]), (r_out[2], r_out[3])]:
-        _diamond(draw, cx, cy, cr, s["outer"])
-
-    # ── 6. Art Deco extra hairline + side ticks ───────────────────────────────
-    if s.get("deco"):
-        gap = 14
-        r_d = [r_out[0] - gap, r_out[1] - gap,
-               r_out[2] + gap, r_out[3] + gap]
-        draw.rectangle(r_d, outline=s["outer"], width=1)
-        mid_y = (r_d[1] + r_d[3]) // 2
-        for side_x in (r_d[0], r_d[2]):
-            draw.line([(side_x, mid_y - 8), (side_x, mid_y + 8)],
-                      fill=s["outer"], width=2)
-
-    # ── 7. Save ───────────────────────────────────────────────────────────────
+    # ── 4. Save ───────────────────────────────────────────────────────────────
     os.makedirs(settings.accepted_dir, exist_ok=True)
     stem     = Path(source_path).stem
     out_path = os.path.join(settings.accepted_dir, f"{stem}_frame{frame_id}.jpg")
