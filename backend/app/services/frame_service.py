@@ -12,7 +12,7 @@ Geometry (px):
     PLATE_H      120
     FRAME_BORDER  30
     ──────────────────
-    portrait area = 740 × 940
+    portrait area = 700 × 840
 
 Usage:
     from app.services.frame_service import compose_portrait
@@ -39,6 +39,8 @@ CANVAS_W = 800
 CANVAS_H = 1000
 PLATE_H = 120
 FRAME_BORDER = 30
+PORTRAIT_TARGET_W = 700
+PORTRAIT_TARGET_H = 840
 
 FONTS_DIR = os.path.join(settings.frames_dir, "fonts")
 
@@ -209,16 +211,15 @@ def _compose(
     # ── 1. Load & resize source ───────────────────────────────────────────────
     with Image.open(source_path) as src:
         src = src.convert("RGB")
-        portrait_h = CANVAS_H
-        portrait_area = (CANVAS_W - FRAME_BORDER * 2, portrait_h - FRAME_BORDER * 2)
+        portrait_area = (PORTRAIT_TARGET_W, PORTRAIT_TARGET_H)
         src = ImageOps.fit(src, portrait_area, Image.LANCZOS)
 
     # ── 2. Canvas ─────────────────────────────────────────────────────────────
     canvas = Image.new("RGB", (CANVAS_W, CANVAS_H), s["bg"])
     draw   = ImageDraw.Draw(canvas)
 
-    px = FRAME_BORDER
-    py = FRAME_BORDER
+    px = (CANVAS_W - src.width) // 2
+    py = (CANVAS_H - src.height) // 2
     canvas.paste(src, (px, py))
 
     # ── 3. Outer thick border ─────────────────────────────────────────────────
