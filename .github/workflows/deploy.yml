@@ -42,6 +42,15 @@ jobs:
           build-args: |
             NEXT_PUBLIC_API_BASE=${{ secrets.NEXT_PUBLIC_API_BASE }}
 
+      - name: Copy compose file to server
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          source: docker-compose.prod.yml
+          target: /opt/vkorni/
+
       - name: Deploy to server
         uses: appleboy/ssh-action@v1
         with:
