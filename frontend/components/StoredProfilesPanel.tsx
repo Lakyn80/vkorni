@@ -1,9 +1,8 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { toAppUrl } from "@/lib/api-base";
 import { normalizePhotoUrl } from "@/utils/photos";
-
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE || "http://localhost:8020";
 
 type StoredProfileListItem = {
   id: number;
@@ -130,7 +129,7 @@ export default function StoredProfilesPanel() {
   async function loadProfiles(preserveSelection = true) {
     setRefreshing(true);
     try {
-      const payload = await readJson<{ profiles: StoredProfileListItem[] }>(`${API_BASE}/api/exported-profiles`);
+      const payload = await readJson<{ profiles: StoredProfileListItem[] }>(toAppUrl("/api/exported-profiles"));
       setProfiles(payload.profiles);
       setSelectedId((current) => {
         if (preserveSelection && current && payload.profiles.some((profile) => profile.id === current)) {
@@ -158,7 +157,7 @@ export default function StoredProfilesPanel() {
 
     let cancelled = false;
     setLoadingDetail(true);
-    void readJson<StoredProfileDetail>(`${API_BASE}/api/exported-profiles/${selectedId}`)
+    void readJson<StoredProfileDetail>(toAppUrl(`/api/exported-profiles/${selectedId}`))
       .then((payload) => {
         if (!cancelled) setDetail(payload);
       })
@@ -183,7 +182,7 @@ export default function StoredProfilesPanel() {
     setMessage(null);
     try {
       const result = await readJson<{ status: string; error?: string; url?: string }>(
-        `${API_BASE}/api/exported-profiles/${detail.id}/resend`,
+        toAppUrl(`/api/exported-profiles/${detail.id}/resend`),
         { method: "POST" }
       );
       if (result.status === "OK") {
@@ -192,7 +191,7 @@ export default function StoredProfilesPanel() {
         setMessage({ ok: false, text: result.error || "Resend skončil chybou" });
       }
       await loadProfiles(true);
-      const refreshed = await readJson<StoredProfileDetail>(`${API_BASE}/api/exported-profiles/${detail.id}`);
+      const refreshed = await readJson<StoredProfileDetail>(toAppUrl(`/api/exported-profiles/${detail.id}`));
       setDetail(refreshed);
     } catch (err) {
       setMessage({ ok: false, text: err instanceof Error ? err.message : "Resend se nezdařil" });

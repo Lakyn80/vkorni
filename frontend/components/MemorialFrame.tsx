@@ -3,8 +3,6 @@
 import { normalizePhotoUrl } from "@/utils/photos";
 import type { Profile } from "@/types";
 
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE || "http://localhost:8020";
-
 type Props = {
   profile: Profile;
   onDrop: (e: React.DragEvent<HTMLDivElement>) => void;
@@ -12,7 +10,7 @@ type Props = {
 
 export function MemorialFrame({ profile, onDrop }: Props) {
   const framedUrl = profile.framedPhotoUrl
-    ? `${API_BASE}${profile.framedPhotoUrl}${profile.framedPreviewVersion ? `?v=${profile.framedPreviewVersion}` : ""}`
+    ? normalizePhotoUrl(`${profile.framedPhotoUrl}${profile.framedPreviewVersion ? `?v=${profile.framedPreviewVersion}` : ""}`)
     : null;
 
   return (

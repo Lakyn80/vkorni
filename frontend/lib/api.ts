@@ -1,6 +1,5 @@
 import type { Profile } from "@/types";
-
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE || "http://localhost:8020";
+import { toAppUrl } from "@/lib/api-base";
 
 function isAbsoluteUrl(value: string | null | undefined): value is string {
   return !!value && /^https?:\/\//i.test(value);
@@ -20,38 +19,38 @@ export const api = {
     const params = new URLSearchParams({ name });
     if (force) params.set("FORCE_REGENERATE", "true");
     return request<{ name: string; text: string; photos: string[]; birth?: string | null; death?: string | null; photo_sources?: Record<string, string> }>(
-      `${API_BASE}/api/generate?${params}`,
+      toAppUrl(`/api/generate?${params}`),
       { method: "POST" }
     );
   },
 
   getCacheList() {
-    return request<{ names: string[] }>(`${API_BASE}/api/cache`);
+    return request<{ names: string[] }>(toAppUrl("/api/cache"));
   },
 
   getCachedProfile(name: string) {
     return request<{ name: string; text: string; photos: string[]; birth?: string | null; death?: string | null; photo_sources?: Record<string, string> }>(
-      `${API_BASE}/api/cache/${encodeURIComponent(name)}`
+      toAppUrl(`/api/cache/${encodeURIComponent(name)}`)
     );
   },
 
   deleteCache(name: string) {
     return request<unknown>(
-      `${API_BASE}/api/cache/${encodeURIComponent(name)}`,
+      toAppUrl(`/api/cache/${encodeURIComponent(name)}`),
       { method: "DELETE" }
     );
   },
 
   deleteAllCache() {
     return request<{ deleted: number }>(
-      `${API_BASE}/api/cache`,
+      toAppUrl("/api/cache"),
       { method: "DELETE" }
     );
   },
 
   frame(photoUrl: string, birth: string | null, death: string | null, frameId?: number | null) {
     return request<{ url: string; frame_id: number }>(
-      `${API_BASE}/api/frame`,
+      toAppUrl("/api/frame"),
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -70,7 +69,7 @@ export const api = {
         : null;
     const photoSourceUrl = mappedPhotoSource ?? directPhotoSource;
     return request<{ status: string; error?: string; url?: string }>(
-      `${API_BASE}/api/export`,
+      toAppUrl("/api/export"),
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -93,7 +92,7 @@ export const api = {
 
   createBatch(names: string[], styleName?: string) {
     return request<{ batch_id: string; total: number; status: string }>(
-      `${API_BASE}/api/batch`,
+      toAppUrl("/api/batch"),
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -103,12 +102,12 @@ export const api = {
   },
 
   getBatch(batchId: string) {
-    return request<import("@/types").BatchStatus>(`${API_BASE}/api/batch/${batchId}`);
+    return request<import("@/types").BatchStatus>(toAppUrl(`/api/batch/${batchId}`));
   },
 
   retryBatch(batchId: string) {
     return request<{ batch_id: string; retried: number }>(
-      `${API_BASE}/api/batch/${batchId}/retry`,
+      toAppUrl(`/api/batch/${batchId}/retry`),
       { method: "POST" }
     );
   },
@@ -117,7 +116,7 @@ export const api = {
     const form = new FormData();
     form.append("file", file);
     return request<{ url: string }>(
-      `${API_BASE}/api/upload?name=${encodeURIComponent(name)}`,
+      toAppUrl(`/api/upload?name=${encodeURIComponent(name)}`),
       { method: "POST", body: form }
     );
   },
@@ -126,7 +125,7 @@ export const api = {
 
   bulkExport(names: string[]) {
     return request<{ export_id: string; total: number }>(
-      `${API_BASE}/api/bulk-export`,
+      toAppUrl("/api/bulk-export"),
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -136,12 +135,12 @@ export const api = {
   },
 
   getBulkExport(exportId: string) {
-    return request<import("@/types").BulkExportStatus>(`${API_BASE}/api/bulk-export/${exportId}`);
+    return request<import("@/types").BulkExportStatus>(toAppUrl(`/api/bulk-export/${exportId}`));
   },
 
   adminLogin(username: string, password: string) {
     return request<{ access_token: string; token_type: string }>(
-      `${API_BASE}/api/admin/login`,
+      toAppUrl("/api/admin/login"),
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -152,7 +151,7 @@ export const api = {
 
   adminChangePassword(token: string, currentPassword: string, newPassword: string) {
     return request<{ status: string }>(
-      `${API_BASE}/api/admin/change-password`,
+      toAppUrl("/api/admin/change-password"),
       {
         method: "POST",
         headers: {
