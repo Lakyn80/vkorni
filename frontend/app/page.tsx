@@ -48,8 +48,14 @@ export default function Page() {
             <span className="text-sm font-medium text-ink/70">Генератор биографий</span>
           </div>
           <div className="flex items-center gap-4">
+            <a
+              href="/admin"
+              className="text-xs font-semibold text-ink/45 hover:text-ink/75 transition-colors"
+            >
+              Админ
+            </a>
             <span className="rounded-full bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-600">
-              ● Online
+              ● Онлайн
             </span>
             <button
               onClick={() => logout(router)}

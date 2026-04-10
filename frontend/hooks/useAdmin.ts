@@ -33,14 +33,14 @@ export function useAdmin() {
 
   const changePassword = useCallback(
     async (currentPassword: string, newPassword: string) => {
-      if (!token) return { ok: false, error: "Not authenticated" };
+      if (!token) return { ok: false, error: "Нет авторизации" };
       setBusy(true);
       setError("");
       try {
         await api.adminChangePassword(token, currentPassword, newPassword);
         return { ok: true };
       } catch (err) {
-        const msg = err instanceof Error ? err.message : "Chyba změny hesla";
+        const msg = err instanceof Error ? err.message : "Ошибка смены пароля";
         setError(msg);
         return { ok: false, error: msg };
       } finally {

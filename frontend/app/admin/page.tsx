@@ -31,16 +31,16 @@ export default function AdminPage() {
     e.preventDefault();
     setResult(null);
     if (cpNew !== cpConfirm) {
-      setResult({ ok: false, msg: "Nová hesla se neshodují" });
+      setResult({ ok: false, msg: "Новые пароли не совпадают" });
       return;
     }
     setBusy(true);
     try {
       await api.adminChangePassword(getToken(), cpCurrent, cpNew);
-      setResult({ ok: true, msg: "Heslo bylo změněno" });
+      setResult({ ok: true, msg: "Пароль изменен" });
       setCpCurrent(""); setCpNew(""); setCpConfirm("");
     } catch (err) {
-      setResult({ ok: false, msg: err instanceof Error ? err.message : "Chyba" });
+      setResult({ ok: false, msg: err instanceof Error ? err.message : "Ошибка" });
     } finally {
       setBusy(false);
     }
@@ -53,18 +53,18 @@ export default function AdminPage() {
           <div>
             <span className="text-xs font-bold uppercase tracking-[0.3em] text-ink/40">Vkorni</span>
             <h1 className="mt-1 text-3xl font-semibold text-ink" style={{ fontFamily: "var(--font-display)" }}>
-              Administrace
+              Администрирование
             </h1>
             <p className="mt-2 max-w-3xl text-sm text-ink/55">
-              Správa přístupu a oddělený archiv již exportovaných profilů uložených v databázi serveru.
+              Управление доступом и отдельный архив уже отправленных профилей, сохраненных в базе данных сервера.
             </p>
           </div>
           <div className="flex items-center gap-4">
             <a href="/" className="text-xs text-ink/40 hover:text-ink/70 transition-colors">
-              ← Aplikace
+              ← Приложение
             </a>
             <button onClick={logout} className="text-xs text-red-400 hover:text-red-600 transition-colors">
-              Odhlásit
+              Выйти
             </button>
           </div>
         </div>
@@ -73,16 +73,16 @@ export default function AdminPage() {
           <div className="space-y-6">
             <div className="rounded-[28px] border border-ink/10 bg-white/75 p-6 shadow-soft backdrop-blur">
               <div className="mb-5">
-                <span className="text-[11px] font-bold uppercase tracking-[0.28em] text-ember/65">Přístup</span>
-                <h2 className="mt-2 text-lg font-semibold text-ink">Změna hesla</h2>
+                <span className="text-[11px] font-bold uppercase tracking-[0.28em] text-ember/65">Доступ</span>
+                <h2 className="mt-2 text-lg font-semibold text-ink">Смена пароля</h2>
                 <p className="mt-2 text-sm text-ink/55">
-                  Tato sekce je oddělená od archivu profilů, aby správa exportů zůstala přehledná.
+                  Этот блок отделен от архива профилей, чтобы управление экспортами оставалось наглядным.
                 </p>
               </div>
               <form onSubmit={handleChangePassword} className="flex flex-col gap-3">
                 <input
                   type="password"
-                  placeholder="Stávající heslo"
+                  placeholder="Текущий пароль"
                   value={cpCurrent}
                   onChange={(e) => setCpCurrent(e.target.value)}
                   required
@@ -90,7 +90,7 @@ export default function AdminPage() {
                 />
                 <input
                   type="password"
-                  placeholder="Nové heslo (min. 8 znaků)"
+                  placeholder="Новый пароль (минимум 8 символов)"
                   value={cpNew}
                   onChange={(e) => setCpNew(e.target.value)}
                   required
@@ -98,7 +98,7 @@ export default function AdminPage() {
                 />
                 <input
                   type="password"
-                  placeholder="Potvrdit nové heslo"
+                  placeholder="Подтвердить новый пароль"
                   value={cpConfirm}
                   onChange={(e) => setCpConfirm(e.target.value)}
                   required
@@ -114,7 +114,7 @@ export default function AdminPage() {
                   disabled={busy}
                   className="rounded-xl bg-ink px-4 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-ink/80 disabled:opacity-50"
                 >
-                  {busy ? "…" : "Změnit heslo"}
+                  {busy ? "…" : "Сменить пароль"}
                 </button>
               </form>
             </div>

@@ -55,20 +55,20 @@ type ApiError = {
 };
 
 function formatDateTime(value?: number | null): string {
-  if (!value) return "Neznámé datum";
-  return new Intl.DateTimeFormat("cs-CZ", {
+  if (!value) return "Дата неизвестна";
+  return new Intl.DateTimeFormat("ru-RU", {
     dateStyle: "medium",
     timeStyle: "short",
   }).format(new Date(value * 1000));
 }
 
 function formatYears(birth?: string | null, death?: string | null): string {
-  if (!birth && !death) return "Roky neuvedeny";
+  if (!birth && !death) return "Годы не указаны";
   return `${birth || "?"} - ${death || "?"}`;
 }
 
 function summarizeError(message?: string | null): string {
-  if (!message) return "Bez chyby";
+  if (!message) return "Без ошибки";
   return message.length > 140 ? `${message.slice(0, 140)}…` : message;
 }
 
@@ -85,6 +85,12 @@ function statusClasses(status: string): string {
   if (status === "OK") return "bg-emerald-50 text-emerald-700 border-emerald-200";
   if (status === "ERROR") return "bg-red-50 text-red-600 border-red-200";
   return "bg-amber-50 text-amber-700 border-amber-200";
+}
+
+function statusLabel(status: string): string {
+  if (status === "OK") return "Успех";
+  if (status === "ERROR") return "Ошибка";
+  return "В работе";
 }
 
 async function readJson<T>(url: string, options?: RequestInit): Promise<T> {
@@ -118,9 +124,9 @@ export default function StoredProfilesPanel() {
   const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null);
 
   const filteredProfiles = useMemo(() => {
-    const needle = query.trim().toLocaleLowerCase("cs-CZ");
+    const needle = query.trim().toLocaleLowerCase("ru-RU");
     return profiles.filter((profile) => {
-      const matchesText = !needle || profile.name.toLocaleLowerCase("cs-CZ").includes(needle);
+      const matchesText = !needle || profile.name.toLocaleLowerCase("ru-RU").includes(needle);
       const matchesStatus = statusFilter === "all" || profile.status === statusFilter;
       return matchesText && matchesStatus;
     });
@@ -138,7 +144,7 @@ export default function StoredProfilesPanel() {
         return payload.profiles[0]?.id ?? null;
       });
     } catch (err) {
-      setMessage({ ok: false, text: err instanceof Error ? err.message : "Nepodařilo se načíst archiv exportů" });
+      setMessage({ ok: false, text: err instanceof Error ? err.message : "Не удалось загрузить архив экспортов" });
     } finally {
       setLoadingList(false);
       setRefreshing(false);
@@ -164,7 +170,7 @@ export default function StoredProfilesPanel() {
       .catch((err) => {
         if (!cancelled) {
           setDetail(null);
-          setMessage({ ok: false, text: err instanceof Error ? err.message : "Nepodařilo se načíst detail profilu" });
+          setMessage({ ok: false, text: err instanceof Error ? err.message : "Не удалось загрузить детали профиля" });
         }
       })
       .finally(() => {
@@ -186,15 +192,15 @@ export default function StoredProfilesPanel() {
         { method: "POST" }
       );
       if (result.status === "OK") {
-        setMessage({ ok: true, text: result.url ? `Profil byl znovu odeslán: ${result.url}` : "Profil byl znovu odeslán" });
+        setMessage({ ok: true, text: result.url ? `Профиль повторно отправлен: ${result.url}` : "Профиль повторно отправлен" });
       } else {
-        setMessage({ ok: false, text: result.error || "Resend skončil chybou" });
+        setMessage({ ok: false, text: result.error || "Повторная отправка завершилась ошибкой" });
       }
       await loadProfiles(true);
       const refreshed = await readJson<StoredProfileDetail>(toAppUrl(`/api/exported-profiles/${detail.id}`));
       setDetail(refreshed);
     } catch (err) {
-      setMessage({ ok: false, text: err instanceof Error ? err.message : "Resend se nezdařil" });
+      setMessage({ ok: false, text: err instanceof Error ? err.message : "Повторная отправка не удалась" });
     } finally {
       setResending(false);
     }
@@ -206,17 +212,17 @@ export default function StoredProfilesPanel() {
     <section className="rounded-[28px] border border-ink/10 bg-white/75 p-5 shadow-soft backdrop-blur">
       <div className="mb-5 flex flex-col gap-4 border-b border-ink/10 pb-5 lg:flex-row lg:items-end lg:justify-between">
         <div>
-          <span className="text-[11px] font-bold uppercase tracking-[0.28em] text-lake/60">Archiv exportu</span>
+          <span className="text-[11px] font-bold uppercase tracking-[0.28em] text-lake/60">Архив экспорта</span>
           <h2 className="mt-2 text-2xl font-semibold text-ink" style={{ fontFamily: "var(--font-display)" }}>
-            Uložené profily z databáze
+            Сохраненные профили из базы данных
           </h2>
           <p className="mt-2 max-w-2xl text-sm text-ink/60">
-            Vlevo je filtrovací seznam exportovaných profilů, vpravo detail uložený v DB včetně pokusů o odeslání a tlačítka pro znovuodeslání.
+            Слева находится список экспортированных профилей с фильтрами, справа детали из БД с историей отправок и кнопкой повторной отправки.
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-3">
           <span className="rounded-full border border-ink/10 bg-white px-3 py-1 text-xs text-ink/55">
-            {filteredProfiles.length} / {profiles.length} profilů
+            {filteredProfiles.length} / {profiles.length} профилей
           </span>
           <button
             type="button"
@@ -224,7 +230,7 @@ export default function StoredProfilesPanel() {
             disabled={refreshing}
             className="rounded-full border border-ink/15 bg-white px-4 py-2 text-sm font-semibold text-ink transition-colors hover:border-ink/30 hover:bg-ink/5 disabled:opacity-50"
           >
-            {refreshing ? "Obnovuji…" : "Obnovit"}
+            {refreshing ? "Обновляю…" : "Обновить"}
           </button>
         </div>
       </div>
@@ -234,7 +240,7 @@ export default function StoredProfilesPanel() {
           type="search"
           value={query}
           onChange={(event) => setQuery(event.target.value)}
-          placeholder="Hledat podle jména"
+          placeholder="Поиск по имени"
           className="rounded-2xl border border-ink/15 bg-white px-4 py-3 text-sm text-ink placeholder:text-ink/35 focus:outline-none focus:ring-2 focus:ring-lake/20"
         />
         <select
@@ -242,9 +248,9 @@ export default function StoredProfilesPanel() {
           onChange={(event) => setStatusFilter(event.target.value as "all" | "OK" | "ERROR")}
           className="rounded-2xl border border-ink/15 bg-white px-4 py-3 text-sm text-ink focus:outline-none focus:ring-2 focus:ring-lake/20"
         >
-          <option value="all">Všechny stavy</option>
-          <option value="OK">Úspěšné</option>
-          <option value="ERROR">Chybové</option>
+          <option value="all">Все статусы</option>
+          <option value="OK">Успешные</option>
+          <option value="ERROR">С ошибкой</option>
         </select>
       </div>
 
@@ -257,13 +263,13 @@ export default function StoredProfilesPanel() {
       <div className="grid gap-5 xl:grid-cols-[360px,minmax(0,1fr)]">
         <div className="rounded-[24px] border border-ink/10 bg-[#f8f8f5] p-3">
           <div className="mb-3 flex items-center justify-between px-2">
-            <h3 className="text-sm font-semibold text-ink">Seznam profilů</h3>
-            {loadingList ? <span className="text-xs text-ink/40">Načítám…</span> : null}
+            <h3 className="text-sm font-semibold text-ink">Список профилей</h3>
+            {loadingList ? <span className="text-xs text-ink/40">Загрузка…</span> : null}
           </div>
           <div className="max-h-[720px] space-y-2 overflow-y-auto pr-1">
             {!loadingList && filteredProfiles.length === 0 ? (
               <div className="rounded-2xl border border-dashed border-ink/15 bg-white px-4 py-6 text-sm text-ink/50">
-                Filtru neodpovídá žádný uložený profil.
+                Ни один сохраненный профиль не подходит под фильтр.
               </div>
             ) : null}
 
@@ -287,7 +293,7 @@ export default function StoredProfilesPanel() {
                       <img src={previewUrl} alt={profile.name} className="h-full w-full object-cover" />
                     ) : (
                       <div className="flex h-full w-full items-center justify-center text-[10px] uppercase tracking-[0.2em] text-ink/30">
-                        Bez foto
+                        Без фото
                       </div>
                     )}
                   </div>
@@ -295,11 +301,11 @@ export default function StoredProfilesPanel() {
                     <div className="flex items-start justify-between gap-2">
                       <p className="line-clamp-2 text-sm font-semibold text-ink">{profile.name}</p>
                       <span className={`shrink-0 rounded-full border px-2 py-1 text-[10px] font-bold uppercase tracking-[0.18em] ${statusClasses(profile.status)}`}>
-                        {profile.status}
+                        {statusLabel(profile.status)}
                       </span>
                     </div>
                     <p className="mt-1 text-xs text-ink/45">{formatYears(profile.birth, profile.death)}</p>
-                    <p className="mt-2 text-xs text-ink/45">Naposledy: {formatDateTime(profile.last_exported_at)}</p>
+                    <p className="mt-2 text-xs text-ink/45">Последняя отправка: {formatDateTime(profile.last_exported_at)}</p>
                     {profile.last_thread_url ? (
                       <p className="mt-1 truncate text-xs text-lake/70">{profile.last_thread_url}</p>
                     ) : null}
@@ -313,11 +319,11 @@ export default function StoredProfilesPanel() {
         <div className="rounded-[24px] border border-ink/10 bg-[#fcfcfa] p-4">
           {!selectedId ? (
             <div className="flex min-h-[420px] items-center justify-center rounded-[20px] border border-dashed border-ink/15 bg-white text-sm text-ink/45">
-              Vyber profil vlevo.
+              Выберите профиль слева.
             </div>
           ) : loadingDetail ? (
             <div className="flex min-h-[420px] items-center justify-center rounded-[20px] border border-dashed border-ink/15 bg-white text-sm text-ink/45">
-              Načítám detail profilu…
+              Загружаю детали профиля…
             </div>
           ) : detail ? (
             <div className="space-y-5">
@@ -328,7 +334,7 @@ export default function StoredProfilesPanel() {
                     <img src={selectedPreview} alt={detail.name} className="h-full w-full object-cover" />
                   ) : (
                     <div className="flex h-full w-full items-center justify-center text-xs uppercase tracking-[0.2em] text-ink/30">
-                      Bez náhledu
+                      Нет превью
                     </div>
                   )}
                 </div>
@@ -336,24 +342,24 @@ export default function StoredProfilesPanel() {
                 <div className="min-w-0 flex-1">
                   <div className="flex flex-wrap items-start justify-between gap-3">
                     <div>
-                      <span className="text-[11px] font-bold uppercase tracking-[0.24em] text-lake/55">Detail profilu</span>
+                      <span className="text-[11px] font-bold uppercase tracking-[0.24em] text-lake/55">Детали профиля</span>
                       <h3 className="mt-2 text-2xl font-semibold text-ink" style={{ fontFamily: "var(--font-display)" }}>
                         {detail.name}
                       </h3>
                       <p className="mt-2 text-sm text-ink/55">{formatYears(detail.birth, detail.death)}</p>
                     </div>
                     <span className={`rounded-full border px-3 py-1 text-xs font-bold uppercase tracking-[0.18em] ${statusClasses(detail.status)}`}>
-                      {detail.status}
+                      {statusLabel(detail.status)}
                     </span>
                   </div>
 
                   <div className="mt-4 grid gap-3 sm:grid-cols-2">
                     <div className="rounded-2xl border border-ink/10 bg-[#f7f7f3] px-3 py-3 text-sm text-ink/60">
-                      <div className="text-[11px] font-bold uppercase tracking-[0.2em] text-ink/35">Poslední export</div>
+                      <div className="text-[11px] font-bold uppercase tracking-[0.2em] text-ink/35">Последний экспорт</div>
                       <div className="mt-2 font-medium text-ink">{formatDateTime(detail.last_exported_at)}</div>
                     </div>
                     <div className="rounded-2xl border border-ink/10 bg-[#f7f7f3] px-3 py-3 text-sm text-ink/60">
-                      <div className="text-[11px] font-bold uppercase tracking-[0.2em] text-ink/35">Pokusů celkem</div>
+                      <div className="text-[11px] font-bold uppercase tracking-[0.2em] text-ink/35">Всего попыток</div>
                       <div className="mt-2 font-medium text-ink">{detail.export_attempts.length}</div>
                     </div>
                   </div>
@@ -366,7 +372,7 @@ export default function StoredProfilesPanel() {
                         rel="noreferrer"
                         className="rounded-full bg-ink px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-ink/85"
                       >
-                        Otevřít thread
+                        Открыть тред
                       </a>
                     ) : null}
                     <button
@@ -375,7 +381,7 @@ export default function StoredProfilesPanel() {
                       disabled={resending}
                       className="rounded-full border border-lake/20 bg-lake/10 px-4 py-2 text-sm font-semibold text-lake transition-colors hover:bg-lake/15 disabled:opacity-50"
                     >
-                      {resending ? "Odesílám…" : "Znovu odeslat z DB"}
+                      {resending ? "Отправляю…" : "Повторно отправить из БД"}
                     </button>
                   </div>
                 </div>
@@ -384,46 +390,46 @@ export default function StoredProfilesPanel() {
               <div className="grid gap-5 2xl:grid-cols-[minmax(0,1.3fr),minmax(320px,0.9fr)]">
                 <div className="rounded-[22px] border border-ink/10 bg-white p-4">
                   <div className="mb-3 flex items-center justify-between">
-                    <h4 className="text-sm font-semibold text-ink">Uložený text</h4>
-                    <span className="text-xs text-ink/35">{detail.text?.length || 0} znaků</span>
+                    <h4 className="text-sm font-semibold text-ink">Сохраненный текст</h4>
+                    <span className="text-xs text-ink/35">{detail.text?.length || 0} символов</span>
                   </div>
                   <div className="max-h-[420px] overflow-y-auto whitespace-pre-line rounded-2xl bg-[#f7f7f3] px-4 py-4 text-sm leading-7 text-ink/75">
-                    {detail.text || "Text není uložen."}
+                    {detail.text || "Текст не сохранен."}
                   </div>
                 </div>
 
                 <div className="space-y-5">
                   <div className="rounded-[22px] border border-ink/10 bg-white p-4">
-                    <h4 className="mb-3 text-sm font-semibold text-ink">Metadata</h4>
+                    <h4 className="mb-3 text-sm font-semibold text-ink">Метаданные</h4>
                     <dl className="space-y-3 text-sm">
                       <div className="rounded-2xl bg-[#f7f7f3] px-3 py-3">
-                        <dt className="text-[11px] font-bold uppercase tracking-[0.18em] text-ink/35">Vybraná fotka</dt>
-                        <dd className="mt-1 break-all text-ink/70">{detail.selected_photo_url || "Neuloženo"}</dd>
+                        <dt className="text-[11px] font-bold uppercase tracking-[0.18em] text-ink/35">Выбранное фото</dt>
+                        <dd className="mt-1 break-all text-ink/70">{detail.selected_photo_url || "Не сохранено"}</dd>
                       </div>
                       <div className="rounded-2xl bg-[#f7f7f3] px-3 py-3">
-                        <dt className="text-[11px] font-bold uppercase tracking-[0.18em] text-ink/35">Zdroj fotky</dt>
-                        <dd className="mt-1 break-all text-ink/70">{detail.selected_source_url || "Neuloženo"}</dd>
+                        <dt className="text-[11px] font-bold uppercase tracking-[0.18em] text-ink/35">Источник фото</dt>
+                        <dd className="mt-1 break-all text-ink/70">{detail.selected_source_url || "Не сохранено"}</dd>
                       </div>
                       <div className="rounded-2xl bg-[#f7f7f3] px-3 py-3">
-                        <dt className="text-[11px] font-bold uppercase tracking-[0.18em] text-ink/35">Frame ID</dt>
-                        <dd className="mt-1 text-ink/70">{detail.frame_id ?? "Neurčeno"}</dd>
+                        <dt className="text-[11px] font-bold uppercase tracking-[0.18em] text-ink/35">ID рамки</dt>
+                        <dd className="mt-1 text-ink/70">{detail.frame_id ?? "Не указано"}</dd>
                       </div>
                       <div className="rounded-2xl bg-[#f7f7f3] px-3 py-3">
-                        <dt className="text-[11px] font-bold uppercase tracking-[0.18em] text-ink/35">Aktuální attachment</dt>
-                        <dd className="mt-1 break-all text-ink/70">{detail.attachment_url || "Neuloženo"}</dd>
+                        <dt className="text-[11px] font-bold uppercase tracking-[0.18em] text-ink/35">Текущее вложение</dt>
+                        <dd className="mt-1 break-all text-ink/70">{detail.attachment_url || "Не сохранено"}</dd>
                       </div>
                     </dl>
                   </div>
 
                   <div className="rounded-[22px] border border-ink/10 bg-white p-4">
                     <div className="mb-3 flex items-center justify-between">
-                      <h4 className="text-sm font-semibold text-ink">Historie odeslání</h4>
-                      <span className="text-xs text-ink/35">{detail.export_attempts.length} záznamů</span>
+                      <h4 className="text-sm font-semibold text-ink">История отправок</h4>
+                      <span className="text-xs text-ink/35">{detail.export_attempts.length} записей</span>
                     </div>
                     <div className="max-h-[360px] space-y-3 overflow-y-auto pr-1">
                       {detail.export_attempts.length === 0 ? (
                         <div className="rounded-2xl bg-[#f7f7f3] px-4 py-4 text-sm text-ink/45">
-                          Historie pokusů zatím není k dispozici.
+                          История попыток пока недоступна.
                         </div>
                       ) : null}
                       {detail.export_attempts.map((attempt) => (
@@ -454,7 +460,7 @@ export default function StoredProfilesPanel() {
             </div>
           ) : (
             <div className="flex min-h-[420px] items-center justify-center rounded-[20px] border border-dashed border-ink/15 bg-white text-sm text-ink/45">
-              Detail profilu se nepodařilo načíst.
+              Не удалось загрузить детали профиля.
             </div>
           )}
         </div>
