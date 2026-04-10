@@ -15,6 +15,19 @@ from app.workers.queue_backend import enqueue_job
 
 logger = logging.getLogger(__name__)
 
+_PERMANENT_EXPORT_ERROR_MARKERS = (
+    "No exportable photo found",
+    "Профиль не найден в кэше",
+    "VKORNI_API_KEY is not set",
+    "VKORNI_NODE_ID is not set",
+)
+
+
+def _is_permanent_export_error(error: str | None) -> bool:
+    if not error:
+        return False
+    return any(marker in error for marker in _PERMANENT_EXPORT_ERROR_MARKERS)
+
 
 def _schedule_watchdog(export_id: str, delay_seconds: int | None = None) -> None:
     enqueue_job(
@@ -50,6 +63,11 @@ def _schedule_export_attempt(
 
 
 def _schedule_retry_or_fail(export_id: str, name: str, attempts: int, error: str) -> None:
+    if _is_permanent_export_error(error):
+        update_job(export_id, name, status="failed", error=error, attempts=attempts, updated_at=time.time())
+        logger.error("bulk export permanently failed for %s due to non-retryable error: %s", name, error)
+        return
+
     if attempts < settings.bulk_export_max_attempts:
         delay_seconds = settings.bulk_export_retry_delay_seconds * attempts
         state = update_job(export_id, name, status="retrying", error=error, attempts=attempts, updated_at=time.time())
@@ -141,7 +159,7 @@ def run_bulk_export_watchdog(export_id: str) -> None:
             _schedule_export_attempt(export_id, result["name"], current_state=result)
             continue
 
-        if status not in {"running", "retrying"}:
+        if status not in {"queued", "running", "retrying"}:
             continue
 
         updated_at = float(result.get("updated_at") or 0)
@@ -160,12 +178,12 @@ def run_bulk_export_watchdog(export_id: str) -> None:
             )
             continue
 
-        logger.warning("bulk export watchdog resumed stalled job for %s", result["name"])
+        logger.warning("bulk export watchdog resumed stalled %s job for %s", status, result["name"])
         resumed_state = update_job(
             export_id,
             result["name"],
             status="retrying",
-            error=result.get("error") or "Bulk export resumed after stalled job",
+            error=result.get("error") or f"Bulk export resumed after stalled {status} job",
             attempts=attempts,
             updated_at=now,
         )

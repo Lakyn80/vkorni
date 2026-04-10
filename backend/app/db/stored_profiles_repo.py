@@ -8,6 +8,16 @@ from app.db.sqlalchemy_db import ProfileExportAttempt, SessionLocal, StoredProfi
 logger = logging.getLogger(__name__)
 
 
+def _path_to_static_url(path: str | None) -> str | None:
+    if not path:
+        return None
+    normalized = path.replace("\\", "/")
+    prefix = "/app/static/"
+    if not normalized.startswith(prefix):
+        return None
+    return f"/static/{normalized[len(prefix):]}"
+
+
 def _serialize_photo(photo: StoredProfilePhoto) -> dict:
     return {
         "id": photo.id,
@@ -32,16 +42,22 @@ def _serialize_attempt(attempt: ProfileExportAttempt) -> dict:
     }
 
 
-def _serialize_profile(profile: StoredProfile, *, include_photos: bool = False, include_attempts: bool = False) -> dict:
+def _serialize_profile(
+    profile: StoredProfile,
+    *,
+    include_text: bool = False,
+    include_photos: bool = False,
+    include_attempts: bool = False,
+) -> dict:
     payload = {
         "id": profile.id,
         "name": profile.name,
-        "text": profile.text,
         "birth": profile.birth,
         "death": profile.death,
         "selected_photo_url": profile.selected_photo_url,
         "selected_source_url": profile.selected_source_url,
         "framed_image_path": profile.framed_image_path,
+        "framed_image_url": _path_to_static_url(profile.framed_image_path),
         "frame_id": profile.frame_id,
         "attachment_id": profile.attachment_id,
         "attachment_url": profile.attachment_url,
@@ -52,6 +68,8 @@ def _serialize_profile(profile: StoredProfile, *, include_photos: bool = False, 
         "updated_at": profile.updated_at,
         "last_exported_at": profile.last_exported_at,
     }
+    if include_text:
+        payload["text"] = profile.text
     if include_photos:
         ordered_photos = sorted(profile.photos, key=lambda item: (item.sort_order, item.id))
         payload["photos"] = [_serialize_photo(photo) for photo in ordered_photos]
@@ -168,7 +186,7 @@ def get_stored_profile(profile_id: int) -> dict | None:
             )
             if profile is None:
                 return None
-            return _serialize_profile(profile, include_photos=True, include_attempts=True)
+            return _serialize_profile(profile, include_text=True, include_photos=True, include_attempts=True)
     except Exception:
         logger.exception("Failed to get stored profile", extra={"stored_profile_id": profile_id})
         return None

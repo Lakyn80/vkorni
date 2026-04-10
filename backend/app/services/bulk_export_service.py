@@ -7,7 +7,7 @@ Key schema:
   bulkexport:{id}:meta  → {total, names[]}
   bulkexport:{id}:{name} → {status, url, error}
 
-Statuses: pending | running | done | failed
+Statuses: pending | queued | retrying | running | done | failed
 TTL: 24 hours
 """
 import json
@@ -102,6 +102,7 @@ def get_bulk_export(eid: str) -> dict | None:
     running = sum(1 for r_ in results if r_["status"] == "running")
     queued = sum(1 for r_ in results if r_["status"] == "queued")
     retrying = sum(1 for r_ in results if r_["status"] == "retrying")
+    pending = meta["total"] - done - failed - running - queued - retrying
     return {
         "id": eid,
         "total": meta["total"],
@@ -110,7 +111,7 @@ def get_bulk_export(eid: str) -> dict | None:
         "running": running,
         "queued": queued,
         "retrying": retrying,
-        "pending": meta["total"] - done - failed - running,
+        "pending": max(0, pending),
         "created_at": meta.get("created_at"),
         "updated_at": meta.get("updated_at"),
         "results": results,

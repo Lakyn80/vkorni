@@ -66,6 +66,18 @@ def test_run_bulk_export_item_retries_failed_export(mock_get_job, mock_get_bio, 
     mock_retry.assert_called_once_with("eid-1", "Test", 1, "temporary error")
 
 
+@patch("app.workers.export_worker._schedule_export_attempt")
+@patch("app.workers.export_worker.update_job")
+def test_schedule_retry_or_fail_marks_non_retryable_error_failed(mock_update, mock_schedule_attempt):
+    from app.workers.export_worker import _schedule_retry_or_fail
+
+    _schedule_retry_or_fail("eid-1", "Test", 1, "No exportable photo found for static XenForo upload")
+
+    mock_update.assert_called_once()
+    assert mock_update.call_args.kwargs["status"] == "failed"
+    mock_schedule_attempt.assert_not_called()
+
+
 @patch("app.workers.export_worker._schedule_watchdog")
 @patch("app.workers.export_worker._schedule_export_attempt")
 @patch("app.workers.export_worker.update_job")
@@ -86,4 +98,31 @@ def test_watchdog_resumes_stalled_running_job(mock_get_bulk_export, mock_time, m
     mock_update.assert_called_once()
     assert mock_update.call_args.kwargs["status"] == "retrying"
     assert mock_schedule_attempt.call_count == 2
+    mock_schedule_watchdog.assert_called_once_with("eid-1")
+
+
+@patch("app.workers.export_worker._schedule_watchdog")
+@patch("app.workers.export_worker._schedule_export_attempt")
+@patch("app.workers.export_worker.update_job")
+@patch("app.workers.export_worker.time.time", return_value=1000.0)
+@patch("app.workers.export_worker.get_bulk_export")
+def test_watchdog_resumes_stalled_queued_job(mock_get_bulk_export, mock_time, mock_update, mock_schedule_attempt, mock_schedule_watchdog):
+    mock_get_bulk_export.return_value = {
+        "results": [
+            {"name": "A", "status": "queued", "attempts": 0, "updated_at": 700.0, "error": None},
+            {"name": "B", "status": "done", "attempts": 1, "updated_at": 1000.0},
+        ]
+    }
+    mock_update.return_value = {"status": "retrying", "attempts": 0, "updated_at": 1000.0, "error": "Bulk export resumed after stalled queued job"}
+
+    run_bulk_export_watchdog("eid-1")
+
+    mock_update.assert_called_once()
+    assert mock_update.call_args.kwargs["status"] == "retrying"
+    assert "stalled queued job" in mock_update.call_args.kwargs["error"]
+    mock_schedule_attempt.assert_called_once_with(
+        "eid-1",
+        "A",
+        current_state={"status": "retrying", "attempts": 0, "updated_at": 1000.0, "error": "Bulk export resumed after stalled queued job"},
+    )
     mock_schedule_watchdog.assert_called_once_with("eid-1")

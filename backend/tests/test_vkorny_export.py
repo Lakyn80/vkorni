@@ -2,7 +2,7 @@ import os
 import tempfile
 from unittest.mock import patch
 
-from app.services.vkorny_export import _absolute_attachment_url, _prepare_export_photo, _upload_attachment, send_profile
+from app.services.vkorny_export import _absolute_attachment_url, _create_thread, _prepare_export_photo, _upload_attachment, send_profile
 
 
 class DummyResponse:
@@ -270,4 +270,24 @@ def test_upload_attachment_retries_transient_new_key_failure(mock_post, mock_sle
         },
     }
     assert mock_post.call_count == 3
+    mock_sleep.assert_called_once()
+
+
+@patch("app.services.vkorny_export.time.sleep")
+@patch("app.services.vkorny_export.requests.post")
+@patch("app.services.vkorny_export.VKORNI_NODE_ID", "8")
+def test_create_thread_retries_transient_failure(mock_post, mock_sleep):
+    mock_post.side_effect = [
+        DummyResponse({}, ok=False, status_code=503, text="temporary outage"),
+        DummyResponse({"thread": {"thread_id": 99}}),
+    ]
+
+    result = _create_thread("Тест", "Биография", [42])
+
+    assert result == {
+        "status": "OK",
+        "thread_id": 99,
+        "url": "https://vkorni.com/threads/99/",
+    }
+    assert mock_post.call_count == 2
     mock_sleep.assert_called_once()

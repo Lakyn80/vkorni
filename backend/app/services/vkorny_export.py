@@ -574,21 +574,61 @@ def _create_thread(name: str, message: str, attachment_ids: list[int]) -> dict:
         form[f"attachment_ids[{i}]"] = str(attachment_id)
 
     body_bytes = urlencode(form, encoding="utf-8").encode("utf-8")
-    response = requests.post(
-        f"{VKORNI_BASE_URL.rstrip('/')}/threads/",
-        data=body_bytes,
-        headers={**_headers(), "Content-Type": "application/x-www-form-urlencoded; charset=utf-8"},
-        timeout=30,
-    )
-    if not response.ok:
+    response = None
+    for attempt in range(1, HTTP_RETRY_ATTEMPTS + 1):
+        try:
+            response = requests.post(
+                f"{VKORNI_BASE_URL.rstrip('/')}/threads/",
+                data=body_bytes,
+                headers={**_headers(), "Content-Type": "application/x-www-form-urlencoded; charset=utf-8"},
+                timeout=30,
+            )
+        except requests.RequestException as exc:
+            if attempt == HTTP_RETRY_ATTEMPTS:
+                logger.exception("XenForo thread create request failed for %s", name)
+                return {
+                    "status": "ERROR",
+                    "error": str(exc),
+                }
+            logger.warning("XenForo thread create request failed for %s, retry %d/%d", name, attempt, HTTP_RETRY_ATTEMPTS)
+            _sleep_before_retry(attempt)
+            continue
+
+        if response.ok:
+            break
+
+        if attempt < HTTP_RETRY_ATTEMPTS and _should_retry_response(response.status_code):
+            logger.warning(
+                "XenForo thread create returned %s for %s, retry %d/%d",
+                response.status_code,
+                name,
+                attempt,
+                HTTP_RETRY_ATTEMPTS,
+            )
+            _sleep_before_retry(attempt)
+            continue
+
         return {
             "status": "ERROR",
             "code": response.status_code,
             "error": response.text[:500],
         }
 
+    if not response or not response.ok:
+        return {
+            "status": "ERROR",
+            "error": "XenForo thread create failed without usable response",
+        }
+
     body = response.json()
     thread_id = body.get("thread", {}).get("thread_id")
+    if not thread_id:
+        logger.error("XenForo thread create response missing thread_id for %s: %s", name, str(body)[:500])
+        return {
+            "status": "ERROR",
+            "code": response.status_code,
+            "error": "XenForo thread response missing thread_id",
+        }
     thread_url = f"{_vkorni_origin()}/threads/{thread_id}/" if thread_id else None
     return {
         "status": "OK",

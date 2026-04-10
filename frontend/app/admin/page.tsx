@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { api } from "@/lib/api";
+import StoredProfilesPanel from "@/components/StoredProfilesPanel";
 
 function getToken(): string {
   const match = document.cookie.match(/(?:^|;\s*)vkorni_token=([^;]+)/);
@@ -46,14 +47,17 @@ export default function AdminPage() {
   }
 
   return (
-    <div className="min-h-screen px-6 py-10">
-      <div className="mx-auto max-w-lg">
-        <div className="mb-8 flex items-center justify-between">
+    <div className="min-h-screen px-5 py-8 md:px-8 md:py-10">
+      <div className="mx-auto max-w-7xl">
+        <div className="mb-8 flex flex-col gap-5 lg:flex-row lg:items-end lg:justify-between">
           <div>
             <span className="text-xs font-bold uppercase tracking-[0.3em] text-ink/40">Vkorni</span>
-            <h1 className="mt-1 text-xl font-semibold text-ink" style={{ fontFamily: "var(--font-display)" }}>
+            <h1 className="mt-1 text-3xl font-semibold text-ink" style={{ fontFamily: "var(--font-display)" }}>
               Administrace
             </h1>
+            <p className="mt-2 max-w-3xl text-sm text-ink/55">
+              Správa přístupu a oddělený archiv již exportovaných profilů uložených v databázi serveru.
+            </p>
           </div>
           <div className="flex items-center gap-4">
             <a href="/" className="text-xs text-ink/40 hover:text-ink/70 transition-colors">
@@ -65,46 +69,58 @@ export default function AdminPage() {
           </div>
         </div>
 
-        <div className="rounded-2xl border border-ink/10 bg-white/60 p-6">
-          <h2 className="mb-4 text-sm font-semibold text-ink">Změna hesla</h2>
-          <form onSubmit={handleChangePassword} className="flex flex-col gap-3">
-            <input
-              type="password"
-              placeholder="Stávající heslo"
-              value={cpCurrent}
-              onChange={(e) => setCpCurrent(e.target.value)}
-              required
-              className="w-full rounded-xl border border-ink/15 bg-white/60 px-4 py-2.5 text-sm text-ink placeholder:text-ink/35 focus:outline-none focus:ring-2 focus:ring-ink/20"
-            />
-            <input
-              type="password"
-              placeholder="Nové heslo (min. 8 znaků)"
-              value={cpNew}
-              onChange={(e) => setCpNew(e.target.value)}
-              required
-              className="w-full rounded-xl border border-ink/15 bg-white/60 px-4 py-2.5 text-sm text-ink placeholder:text-ink/35 focus:outline-none focus:ring-2 focus:ring-ink/20"
-            />
-            <input
-              type="password"
-              placeholder="Potvrdit nové heslo"
-              value={cpConfirm}
-              onChange={(e) => setCpConfirm(e.target.value)}
-              required
-              className="w-full rounded-xl border border-ink/15 bg-white/60 px-4 py-2.5 text-sm text-ink placeholder:text-ink/35 focus:outline-none focus:ring-2 focus:ring-ink/20"
-            />
-            {result && (
-              <p className={`rounded-lg px-3 py-2 text-xs ${result.ok ? "bg-emerald-50 text-emerald-600" : "bg-red-50 text-red-500"}`}>
-                {result.msg}
-              </p>
-            )}
-            <button
-              type="submit"
-              disabled={busy}
-              className="rounded-xl bg-ink px-4 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-ink/80 disabled:opacity-50"
-            >
-              {busy ? "…" : "Změnit heslo"}
-            </button>
-          </form>
+        <div className="grid gap-6 xl:grid-cols-[320px,minmax(0,1fr)]">
+          <div className="space-y-6">
+            <div className="rounded-[28px] border border-ink/10 bg-white/75 p-6 shadow-soft backdrop-blur">
+              <div className="mb-5">
+                <span className="text-[11px] font-bold uppercase tracking-[0.28em] text-ember/65">Přístup</span>
+                <h2 className="mt-2 text-lg font-semibold text-ink">Změna hesla</h2>
+                <p className="mt-2 text-sm text-ink/55">
+                  Tato sekce je oddělená od archivu profilů, aby správa exportů zůstala přehledná.
+                </p>
+              </div>
+              <form onSubmit={handleChangePassword} className="flex flex-col gap-3">
+                <input
+                  type="password"
+                  placeholder="Stávající heslo"
+                  value={cpCurrent}
+                  onChange={(e) => setCpCurrent(e.target.value)}
+                  required
+                  className="w-full rounded-xl border border-ink/15 bg-white/60 px-4 py-2.5 text-sm text-ink placeholder:text-ink/35 focus:outline-none focus:ring-2 focus:ring-ink/20"
+                />
+                <input
+                  type="password"
+                  placeholder="Nové heslo (min. 8 znaků)"
+                  value={cpNew}
+                  onChange={(e) => setCpNew(e.target.value)}
+                  required
+                  className="w-full rounded-xl border border-ink/15 bg-white/60 px-4 py-2.5 text-sm text-ink placeholder:text-ink/35 focus:outline-none focus:ring-2 focus:ring-ink/20"
+                />
+                <input
+                  type="password"
+                  placeholder="Potvrdit nové heslo"
+                  value={cpConfirm}
+                  onChange={(e) => setCpConfirm(e.target.value)}
+                  required
+                  className="w-full rounded-xl border border-ink/15 bg-white/60 px-4 py-2.5 text-sm text-ink placeholder:text-ink/35 focus:outline-none focus:ring-2 focus:ring-ink/20"
+                />
+                {result && (
+                  <p className={`rounded-lg px-3 py-2 text-xs ${result.ok ? "bg-emerald-50 text-emerald-600" : "bg-red-50 text-red-500"}`}>
+                    {result.msg}
+                  </p>
+                )}
+                <button
+                  type="submit"
+                  disabled={busy}
+                  className="rounded-xl bg-ink px-4 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-ink/80 disabled:opacity-50"
+                >
+                  {busy ? "…" : "Změnit heslo"}
+                </button>
+              </form>
+            </div>
+          </div>
+
+          <StoredProfilesPanel />
         </div>
       </div>
     </div>
