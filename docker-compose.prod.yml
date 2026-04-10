@@ -2,11 +2,11 @@ services:
   backend:
     image: ghcr.io/lakyn80/vkorni-backend:latest
     volumes:
-      - backend_photos:/app/static/photos
-      - backend_accepted_images:/app/static/accepted_images
-      - backend_rejected_images:/app/static/rejected_images
-      - backend_exported_profiles:/app/static/exported_profiles
-      - backend_data:/app/app/data
+      - /opt/vkorni/static/photos:/app/static/photos
+      - /opt/vkorni/static/accepted_images:/app/static/accepted_images
+      - /opt/vkorni/static/rejected_images:/app/static/rejected_images
+      - /opt/vkorni/static/exported_profiles:/app/static/exported_profiles
+      - /opt/vkorni/data:/app/app/data
       - backend_chroma:/app/chroma_data
     ports:
       - "8020:8000"
@@ -20,11 +20,11 @@ services:
     image: ghcr.io/lakyn80/vkorni-backend:latest
     command: rq worker --with-scheduler --url ${REDIS_URL} bios images
     volumes:
-      - backend_photos:/app/static/photos
-      - backend_accepted_images:/app/static/accepted_images
-      - backend_rejected_images:/app/static/rejected_images
-      - backend_exported_profiles:/app/static/exported_profiles
-      - backend_data:/app/app/data
+      - /opt/vkorni/static/photos:/app/static/photos
+      - /opt/vkorni/static/accepted_images:/app/static/accepted_images
+      - /opt/vkorni/static/rejected_images:/app/static/rejected_images
+      - /opt/vkorni/static/exported_profiles:/app/static/exported_profiles
+      - /opt/vkorni/data:/app/app/data
       - backend_chroma:/app/chroma_data
     depends_on:
       - redis
@@ -48,9 +48,4 @@ services:
     restart: unless-stopped
 
 volumes:
-  backend_photos:
-  backend_accepted_images:
-  backend_rejected_images:
-  backend_exported_profiles:
-  backend_data:
   backend_chroma:
