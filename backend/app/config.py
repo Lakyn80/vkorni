@@ -15,6 +15,7 @@ class Settings:
     bulk_export_item_timeout: int = int(os.getenv("BULK_EXPORT_ITEM_TIMEOUT", "900"))
     bulk_export_max_attempts: int = int(os.getenv("BULK_EXPORT_MAX_ATTEMPTS", "5"))
     bulk_export_retry_delay_seconds: int = int(os.getenv("BULK_EXPORT_RETRY_DELAY_SECONDS", "15"))
+    bulk_export_attachment_limit_retry_delay_seconds: int = int(os.getenv("BULK_EXPORT_ATTACHMENT_LIMIT_RETRY_DELAY_SECONDS", "900"))
     bulk_export_watchdog_interval_seconds: int = int(os.getenv("BULK_EXPORT_WATCHDOG_INTERVAL_SECONDS", "60"))
     bulk_export_stall_seconds: int = int(os.getenv("BULK_EXPORT_STALL_SECONDS", "180"))
 

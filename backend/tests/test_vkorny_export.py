@@ -146,10 +146,10 @@ def test_send_profile_creates_thread_only_after_internal_image_storage(mock_post
     assert result["status"] == "OK"
     assert result["thread_id"] == 99
     assert result["attachment_id"] == 42
-    assert result["attachment_url"] == "https://backend.example/static/exported_profiles/xenforo_full/42-example.webp"
+    assert result["attachment_url"] == "https://vkorni.com/attachments/example.42/?hash=abc"
     sent_body = mock_post.call_args.kwargs["data"].decode("utf-8")
     assert "attachment_ids%5B0%5D=42" in sent_body
-    assert "%5BIMG%5Dhttps%3A%2F%2Fbackend.example%2Fstatic%2Fexported_profiles%2Fxenforo_full%2F42-example.webp%5B%2FIMG%5D" in sent_body
+    assert "%5BATTACH%3Dfull%5D42%5B%2FATTACH%5D" in sent_body
 
 
 @patch("app.services.vkorny_export.VKORNI_API_KEY", "test-key")
@@ -191,14 +191,16 @@ def test_send_profile_does_not_create_thread_when_attachment_upload_fails(mock_p
 })
 @patch("app.services.vkorny_export._download_and_store_internal_image", return_value=None)
 @patch("app.services.vkorny_export.requests.post")
-def test_send_profile_fails_when_internal_image_storage_fails(mock_post, mock_store_image, mock_upload, mock_prepare):
+def test_send_profile_continues_when_internal_image_storage_fails(mock_post, mock_store_image, mock_upload, mock_prepare):
     mock_post.return_value = DummyResponse({"thread": {"thread_id": 99}})
 
     result = send_profile("Тест", "Биография", ["/static/photos/Test/a.webp"])
 
-    assert result["status"] == "ERROR"
-    assert "persist full-size export image" in result["error"]
-    mock_post.assert_not_called()
+    assert result["status"] == "OK"
+    assert result["thread_id"] == 99
+    assert result["attachment_url"] == "https://vkorni.com/attachments/example.42/?hash=abc"
+    assert result["stable_image_path"] is None
+    mock_post.assert_called_once()
 
 
 @patch("app.services.vkorny_export._download_source_photo", return_value="/tmp/downloaded.webp")
@@ -271,6 +273,36 @@ def test_upload_attachment_retries_transient_new_key_failure(mock_post, mock_sle
     }
     assert mock_post.call_count == 3
     mock_sleep.assert_called_once()
+
+
+@patch("app.services.vkorny_export.requests.post")
+def test_upload_attachment_surfaces_xenforo_error_code(mock_post):
+    mock_post.side_effect = [
+        DummyResponse({"key": "upload-key"}),
+        DummyResponse(
+            {
+                "errors": [
+                    {
+                        "code": "you_have_reached_the_maximum_limit_for_attachment_uploads",
+                        "message": "Лимит загрузок вложений достигнут.",
+                    }
+                ]
+            },
+            ok=False,
+            status_code=400,
+            text='{"errors":[{"code":"you_have_reached_the_maximum_limit_for_attachment_uploads"}]}',
+        ),
+    ]
+
+    fd, path = tempfile.mkstemp(suffix=".jpg")
+    os.close(fd)
+    try:
+        result = _upload_attachment(path)
+    finally:
+        os.remove(path)
+
+    assert result is not None
+    assert "you_have_reached_the_maximum_limit_for_attachment_uploads" in result["error"]
 
 
 @patch("app.services.vkorny_export.time.sleep")

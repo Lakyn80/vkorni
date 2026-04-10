@@ -29,7 +29,7 @@ def test_smoke_cache_get_missing(mock_get):
     assert client.get("/api/cache/НетТакого").status_code == 404
 
 
-@patch("app.api.biography.delete_cached", return_value=True)
+@patch("app.api.biography.delete_biography", return_value=True)
 def test_smoke_cache_delete(mock_del):
     assert client.delete("/api/cache/Яшин").status_code == 200
 

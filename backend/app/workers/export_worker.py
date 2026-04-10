@@ -8,7 +8,13 @@ import logging
 import time
 
 from app.config import settings
-from app.services.bulk_export_service import get_bulk_export, get_bulk_export_job, update_job
+from app.services.bulk_export_service import (
+    get_attachment_limit_cooldown,
+    get_bulk_export,
+    get_bulk_export_job,
+    set_attachment_limit_cooldown,
+    update_job,
+)
 from app.services.cache_service import get_biography
 from app.services.export_service import export_profile_to_vkorni
 from app.workers.queue_backend import enqueue_job
@@ -21,12 +27,23 @@ _PERMANENT_EXPORT_ERROR_MARKERS = (
     "VKORNI_API_KEY is not set",
     "VKORNI_NODE_ID is not set",
 )
+_ATTACHMENT_LIMIT_ERROR_MARKERS = (
+    "you_have_reached_the_maximum_limit_for_attachment_uploads",
+    "maximum limit for attachment uploads",
+)
 
 
 def _is_permanent_export_error(error: str | None) -> bool:
     if not error:
         return False
     return any(marker in error for marker in _PERMANENT_EXPORT_ERROR_MARKERS)
+
+
+def _is_attachment_limit_error(error: str | None) -> bool:
+    if not error:
+        return False
+    lowered = error.lower()
+    return any(marker in lowered for marker in _ATTACHMENT_LIMIT_ERROR_MARKERS)
 
 
 def _schedule_watchdog(export_id: str, delay_seconds: int | None = None) -> None:
@@ -70,15 +87,28 @@ def _schedule_retry_or_fail(export_id: str, name: str, attempts: int, error: str
 
     if attempts < settings.bulk_export_max_attempts:
         delay_seconds = settings.bulk_export_retry_delay_seconds * attempts
+        if _is_attachment_limit_error(error):
+            delay_seconds = max(delay_seconds, settings.bulk_export_attachment_limit_retry_delay_seconds)
+            set_attachment_limit_cooldown(delay_seconds, reason=error)
         state = update_job(export_id, name, status="retrying", error=error, attempts=attempts, updated_at=time.time())
         _schedule_export_attempt(export_id, name, current_state=state, delay_seconds=delay_seconds)
-        logger.warning(
-            "bulk export retry scheduled for %s (%d/%d): %s",
-            name,
-            attempts,
-            settings.bulk_export_max_attempts,
-            error,
-        )
+        if _is_attachment_limit_error(error):
+            logger.warning(
+                "bulk export attachment-limit cooldown scheduled for %s (%d/%d) in %ds: %s",
+                name,
+                attempts,
+                settings.bulk_export_max_attempts,
+                delay_seconds,
+                error,
+            )
+        else:
+            logger.warning(
+                "bulk export retry scheduled for %s (%d/%d): %s",
+                name,
+                attempts,
+                settings.bulk_export_max_attempts,
+                error,
+            )
         return
 
     update_job(export_id, name, status="failed", error=error, attempts=attempts, updated_at=time.time())
@@ -103,6 +133,20 @@ def run_bulk_export_item(export_id: str, name: str) -> None:
     state = get_bulk_export_job(export_id, name)
     if not state or state.get("status") == "done":
         return
+
+    cooldown = get_attachment_limit_cooldown()
+    if cooldown:
+        remaining = max(1, int(float(cooldown.get("until") or 0) - time.time()))
+        if remaining > 0:
+            waiting_error = cooldown.get("reason") or "Waiting for XenForo attachment upload cooldown"
+            delayed_state = update_job(export_id, name, status="retrying", error=waiting_error, updated_at=time.time())
+            _schedule_export_attempt(export_id, name, current_state=delayed_state, delay_seconds=remaining)
+            logger.warning(
+                "bulk export delayed for %s because XenForo attachment cooldown is active (%ds remaining)",
+                name,
+                remaining,
+            )
+            return
 
     attempts = int(state.get("attempts", 0) or 0) + 1
     update_job(export_id, name, status="running", error=None, attempts=attempts, updated_at=time.time())

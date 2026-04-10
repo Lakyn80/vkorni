@@ -19,6 +19,7 @@ from app.config import settings
 
 _TTL = 86_400
 _UNSET = object()
+_ATTACHMENT_LIMIT_COOLDOWN_KEY = "bulkexport:attachment_limit:cooldown"
 
 
 def _r() -> Redis:
@@ -116,3 +117,18 @@ def get_bulk_export(eid: str) -> dict | None:
         "updated_at": meta.get("updated_at"),
         "results": results,
     }
+
+
+def set_attachment_limit_cooldown(delay_seconds: int, reason: str | None = None) -> dict:
+    now = time.time()
+    until = now + max(1, int(delay_seconds))
+    payload = {"until": until, "reason": reason, "created_at": now}
+    _r().setex(_ATTACHMENT_LIMIT_COOLDOWN_KEY, max(1, int(delay_seconds)), json.dumps(payload))
+    return payload
+
+
+def get_attachment_limit_cooldown() -> dict | None:
+    raw = _r().get(_ATTACHMENT_LIMIT_COOLDOWN_KEY)
+    if not raw:
+        return None
+    return json.loads(raw)

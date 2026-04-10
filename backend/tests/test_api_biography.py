@@ -4,6 +4,7 @@ from unittest.mock import patch, MagicMock
 from fastapi.testclient import TestClient
 
 from app.main import app
+from app.db.redis_client import CacheUnavailableError
 
 client = TestClient(app)
 
@@ -63,6 +64,24 @@ def test_generate_new_profile(mock_set, mock_photos_repo, mock_images, mock_uniq
 @patch("app.api.biography.is_unique_enough", return_value=True)
 @patch("app.api.biography.fetch_person_images", return_value=[])
 @patch("app.api.biography.get_photos_by_person", return_value=[])
+@patch("app.api.biography.set_biography", side_effect=CacheUnavailableError("Redis down"))
+def test_generate_returns_profile_when_cache_write_fails(mock_set, mock_photos_repo, mock_images, mock_unique,
+                                                         mock_gen, mock_style, mock_wiki, mock_cache):
+    r = client.post("/api/generate?name=Лев Яшин")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["name"] == "Лев Яшин"
+    assert body["text"] == LONG_TEXT
+    mock_set.assert_called_once()
+
+
+@patch("app.api.biography.get_biography", return_value=None)
+@patch("app.api.biography.fetch_person_from_wikipedia", return_value=FAKE_PERSON)
+@patch("app.api.biography.get_style_context", return_value="style")
+@patch("app.api.biography.generate_text", return_value=(LONG_TEXT, "angle1"))
+@patch("app.api.biography.is_unique_enough", return_value=True)
+@patch("app.api.biography.fetch_person_images", return_value=[])
+@patch("app.api.biography.get_photos_by_person", return_value=[])
 @patch("app.api.biography.set_biography")
 def test_generate_normalizes_comma_name(mock_set, mock_photos_repo, mock_images, mock_unique,
                                         mock_gen, mock_style, mock_wiki, mock_cache):
@@ -97,6 +116,12 @@ def test_cache_list(mock_list):
     assert r.json()["names"] == ["Яшин", "Харламов"]
 
 
+@patch("app.api.biography.list_biographies", side_effect=CacheUnavailableError("Redis down"))
+def test_cache_list_returns_503_when_cache_unavailable(mock_list):
+    r = client.get("/api/cache")
+    assert r.status_code == 503
+
+
 @patch("app.api.biography.get_biography", return_value={"name": "Яшин", "text": "bio", "photos": []})
 def test_get_cached_profile(mock_get):
     r = client.get("/api/cache/Яшин")
@@ -110,11 +135,23 @@ def test_get_cached_profile_not_found(mock_get):
     assert r.status_code == 404
 
 
-@patch("app.api.biography.delete_cached", return_value=True)
+@patch("app.api.biography.get_biography_strict", side_effect=CacheUnavailableError("Redis down"))
+def test_get_cached_profile_returns_503_when_cache_unavailable(mock_get):
+    r = client.get("/api/cache/Яшин")
+    assert r.status_code == 503
+
+
+@patch("app.api.biography.delete_biography", return_value=True)
 def test_delete_cache(mock_del):
     r = client.delete("/api/cache/Яшин")
     assert r.status_code == 200
     assert r.json()["deleted"] is True
+
+
+@patch("app.api.biography.delete_biography", side_effect=CacheUnavailableError("Redis down"))
+def test_delete_cache_returns_503_when_cache_unavailable(mock_del):
+    r = client.delete("/api/cache/Яшин")
+    assert r.status_code == 503
 
 
 @patch("app.api.biography.delete_all_biographies", return_value=5)
@@ -122,6 +159,12 @@ def test_delete_all_cache(mock_del):
     r = client.delete("/api/cache")
     assert r.status_code == 200
     assert r.json()["deleted"] == 5
+
+
+@patch("app.api.biography.delete_all_biographies", side_effect=CacheUnavailableError("Redis down"))
+def test_delete_all_cache_returns_503_when_cache_unavailable(mock_del):
+    r = client.delete("/api/cache")
+    assert r.status_code == 503
 
 
 # ── /wiki ──────────────────────────────────────────────────────────────────────

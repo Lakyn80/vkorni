@@ -8,6 +8,10 @@ def get_biography(name: str) -> dict | None:
     return get_json(name)
 
 
+def get_biography_strict(name: str) -> dict | None:
+    return get_json(name, raise_on_error=True)
+
+
 def set_biography(name: str, text: str, photos: list[str], birth: str | None = None, death: str | None = None, photo_sources: dict | None = None) -> None:
     value = {"name": name, "text": text, "photos": photos, "birth": birth, "death": death, "photo_sources": photo_sources or {}}
     set_json(name, value)

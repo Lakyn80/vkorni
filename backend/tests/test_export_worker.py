@@ -24,8 +24,9 @@ def test_schedule_bulk_export_queues_only_pending_jobs(mock_get_bulk_export, moc
 @patch("app.workers.export_worker.update_job")
 @patch("app.workers.export_worker.export_profile_to_vkorni")
 @patch("app.workers.export_worker.get_biography")
+@patch("app.workers.export_worker.get_attachment_limit_cooldown", return_value=None)
 @patch("app.workers.export_worker.get_bulk_export_job")
-def test_run_bulk_export_item_marks_done_on_success(mock_get_job, mock_get_bio, mock_export, mock_update):
+def test_run_bulk_export_item_marks_done_on_success(mock_get_job, mock_get_cooldown, mock_get_bio, mock_export, mock_update):
     mock_get_job.return_value = {"status": "queued", "attempts": 0}
     mock_get_bio.return_value = {
         "name": "Test",
@@ -49,8 +50,9 @@ def test_run_bulk_export_item_marks_done_on_success(mock_get_job, mock_get_bio, 
 @patch("app.workers.export_worker.update_job")
 @patch("app.workers.export_worker.export_profile_to_vkorni")
 @patch("app.workers.export_worker.get_biography")
+@patch("app.workers.export_worker.get_attachment_limit_cooldown", return_value=None)
 @patch("app.workers.export_worker.get_bulk_export_job")
-def test_run_bulk_export_item_retries_failed_export(mock_get_job, mock_get_bio, mock_export, mock_update, mock_retry):
+def test_run_bulk_export_item_retries_failed_export(mock_get_job, mock_get_cooldown, mock_get_bio, mock_export, mock_update, mock_retry):
     mock_get_job.return_value = {"status": "queued", "attempts": 0}
     mock_get_bio.return_value = {
         "name": "Test",
@@ -76,6 +78,43 @@ def test_schedule_retry_or_fail_marks_non_retryable_error_failed(mock_update, mo
     mock_update.assert_called_once()
     assert mock_update.call_args.kwargs["status"] == "failed"
     mock_schedule_attempt.assert_not_called()
+
+
+@patch("app.workers.export_worker.set_attachment_limit_cooldown")
+@patch("app.workers.export_worker._schedule_export_attempt")
+@patch("app.workers.export_worker.update_job")
+def test_schedule_retry_or_fail_adds_global_cooldown_for_attachment_limit(mock_update, mock_schedule_attempt, mock_set_cooldown):
+    from app.workers.export_worker import _schedule_retry_or_fail
+
+    mock_update.return_value = {"status": "retrying", "attempts": 1, "updated_at": 1000.0, "error": "limit"}
+    _schedule_retry_or_fail(
+        "eid-1",
+        "Test",
+        1,
+        "XenForo attachment upload failed (400, you_have_reached_the_maximum_limit_for_attachment_uploads): limit",
+    )
+
+    mock_set_cooldown.assert_called_once()
+    mock_schedule_attempt.assert_called_once()
+    assert mock_schedule_attempt.call_args.kwargs["delay_seconds"] >= 900
+
+
+@patch("app.workers.export_worker._schedule_export_attempt")
+@patch("app.workers.export_worker.update_job")
+@patch("app.workers.export_worker.get_attachment_limit_cooldown")
+@patch("app.workers.export_worker.get_bulk_export_job")
+def test_run_bulk_export_item_defers_when_global_attachment_cooldown_is_active(mock_get_job, mock_get_cooldown, mock_update, mock_schedule_attempt):
+    mock_get_job.return_value = {"status": "queued", "attempts": 0}
+    mock_get_cooldown.return_value = {"until": 2000.0, "reason": "attachment limit"}
+    mock_update.return_value = {"status": "retrying", "attempts": 0, "updated_at": 1000.0, "error": "attachment limit"}
+
+    with patch("app.workers.export_worker.time.time", return_value=1000.0):
+        run_bulk_export_item("eid-1", "Test")
+
+    mock_update.assert_called_once()
+    assert mock_update.call_args.kwargs["status"] == "retrying"
+    mock_schedule_attempt.assert_called_once()
+    assert mock_schedule_attempt.call_args.kwargs["delay_seconds"] == 1000
 
 
 @patch("app.workers.export_worker._schedule_watchdog")

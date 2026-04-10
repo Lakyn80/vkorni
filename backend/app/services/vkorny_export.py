@@ -266,6 +266,28 @@ def _should_retry_response(status_code: int) -> bool:
     return status_code in RETRYABLE_STATUS_CODES
 
 
+def _format_xenforo_error(prefix: str, response: requests.Response) -> str:
+    try:
+        payload = response.json()
+    except ValueError:
+        snippet = response.text[:200].strip()
+        return f"{prefix} ({response.status_code}): {snippet}" if snippet else f"{prefix} ({response.status_code})"
+
+    errors = payload.get("errors") or []
+    if errors:
+        first = errors[0] or {}
+        code = first.get("code")
+        message = first.get("message")
+        parts = [prefix, f"({response.status_code}"]
+        if code:
+            parts[-1] += f", {code}"
+        parts[-1] += ")"
+        base = " ".join(parts)
+        return f"{base}: {message}" if message else base
+
+    return f"{prefix} ({response.status_code})"
+
+
 def _upload_attachment(file_path: str) -> dict | None:
     base = VKORNI_BASE_URL.rstrip("/")
     try:
@@ -300,8 +322,9 @@ def _upload_attachment(file_path: str) -> dict | None:
                 _sleep_before_retry(attempt)
                 continue
 
-            logger.error("XenForo new-key failed: %s %s", r.status_code, r.text[:200])
-            return None
+            error_message = _format_xenforo_error("XenForo new-key failed", r)
+            logger.error(error_message)
+            return {"error": error_message}
 
         if not key:
             logger.error("XenForo new-key response missing key")
@@ -341,8 +364,9 @@ def _upload_attachment(file_path: str) -> dict | None:
                 _sleep_before_retry(attempt)
                 continue
 
-            logger.error("XenForo attachment upload failed: %s %s", r2.status_code, r2.text[:200])
-            return None
+            error_message = _format_xenforo_error("XenForo attachment upload failed", r2)
+            logger.error(error_message)
+            return {"error": error_message}
 
         if not r2 or not r2.ok:
             logger.error("XenForo attachment upload failed without usable response for %s", file_path)
@@ -365,21 +389,24 @@ def _upload_attachment(file_path: str) -> dict | None:
         }
     except Exception:
         logger.exception("XenForo attachment upload error")
-        return None
+        return {"error": "XenForo attachment upload error"}
 
 
 def _build_message(
     text: str,
-    attachment_ids: list[int],
+    attachment_id: int | None = None,
     birth: str | None = None,
     death: str | None = None,
     attachment_url: str | None = None,
 ) -> str:
-    if not attachment_url:
-        raise ValueError("Stable internal image URL is required for final post render")
+    if attachment_id is None and not attachment_url:
+        raise ValueError("Attachment id or attachment URL is required for final post render")
 
     parts = []
-    parts.append(f"[CENTER][IMG]{attachment_url}[/IMG][/CENTER]")
+    if attachment_id is not None:
+        parts.append(f"[CENTER][ATTACH=full]{attachment_id}[/ATTACH][/CENTER]")
+    else:
+        parts.append(f"[CENTER][IMG]{attachment_url}[/IMG][/CENTER]")
 
     if parts:
         parts.append("")
@@ -690,8 +717,9 @@ def send_profile(
     try:
         upload = _upload_attachment(prepared["export_path"])
         if not upload or not upload.get("attachment_id"):
+            upload_error = (upload or {}).get("error") or "XenForo attachment upload failed"
             return _error_result(
-                "XenForo attachment upload failed; thread was not created",
+                f"{upload_error}; thread was not created",
                 source_photo_path=prepared.get("source_photo_path"),
                 source_photo_url=prepared.get("source_photo_url"),
                 image_origin=prepared.get("image_origin"),
@@ -701,35 +729,25 @@ def send_profile(
             )
 
         attachment_id = upload["attachment_id"]
+        xenforo_attachment_url = upload["full_size_source"]["download_url"]
         stored_image = _download_and_store_internal_image(
             attachment_id=attachment_id,
             source=upload["full_size_source"],
         )
         if not stored_image:
-            logger.error("Failed to persist full-size XenForo image attachment_id=%s", attachment_id)
-            return _error_result(
-                "Failed to persist full-size export image; thread was not created",
-                attachment_id=attachment_id,
-                source_photo_path=prepared.get("source_photo_path"),
-                source_photo_url=prepared.get("source_photo_url"),
-                image_origin=prepared.get("image_origin"),
-                selected_photo_url=preferred_source_photo_url or prepared.get("selected_photo_url"),
-                export_path=prepared.get("export_path"),
-                frame_id=prepared.get("frame_id"),
-            )
+            logger.warning("Failed to persist full-size XenForo image attachment_id=%s; continuing with forum attachment only", attachment_id)
 
-        attachment_url = stored_image["public_url"]
-        stable_image_path = stored_image["local_path"]
+        stable_image_path = stored_image["local_path"] if stored_image else None
         exported_selected_photo_url = prepared.get("selected_photo_url")
         if preferred_source_photo_url and exported_selected_photo_url == photo_list[0]:
             exported_selected_photo_url = preferred_source_photo_url
-        logger.info("Final post image source selected attachment_id=%s url=%s", attachment_id, attachment_url)
+        logger.info("Final post image source selected attachment_id=%s url=%s", attachment_id, xenforo_attachment_url)
         message = _build_message(
             text,
-            [attachment_id],
+            attachment_id=attachment_id,
             birth=birth,
             death=death,
-            attachment_url=attachment_url,
+            attachment_url=xenforo_attachment_url,
         )
 
         result = _create_thread(name, message, [attachment_id])
@@ -737,7 +755,7 @@ def send_profile(
             result.update(
                 {
                     "attachment_id": attachment_id,
-                    "attachment_url": attachment_url,
+                    "attachment_url": xenforo_attachment_url,
                     "source_photo_path": prepared.get("source_photo_path"),
                     "source_photo_url": prepared.get("source_photo_url"),
                     "image_origin": prepared.get("image_origin"),
@@ -752,7 +770,7 @@ def send_profile(
         result.update(
             {
                 "attachment_id": attachment_id,
-                "attachment_url": attachment_url,
+                "attachment_url": xenforo_attachment_url,
                 "source_photo_path": prepared.get("source_photo_path"),
                 "source_photo_url": prepared.get("source_photo_url"),
                 "image_origin": prepared.get("image_origin"),

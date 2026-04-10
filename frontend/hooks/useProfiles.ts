@@ -150,7 +150,6 @@ export function useProfiles(onNameResolved: (name: string) => void) {
   const regenerate = useCallback(
     async (profile: Profile) => {
       try {
-        await api.deleteCache(profile.name);
         const data = await api.generate(profile.name, true);
         const photos = Array.isArray(data.photos) ? data.photos : [];
         const nextSelectedPhoto = photos[0] || profile.selectedPhoto || "";
