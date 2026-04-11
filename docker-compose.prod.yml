@@ -34,6 +34,8 @@ services:
 
   frontend:
     image: ghcr.io/lakyn80/vkorni-frontend:latest
+    environment:
+      API_PROXY_TARGET: ${API_PROXY_TARGET:-http://backend:8000}
     ports:
       - "3014:3000"
     depends_on:

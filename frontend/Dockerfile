@@ -9,7 +9,9 @@ RUN --mount=type=cache,target=/root/.npm \
 FROM node:20-alpine AS builder
 WORKDIR /app
 ARG NEXT_PUBLIC_API_BASE
+ARG API_PROXY_TARGET
 ENV NEXT_PUBLIC_API_BASE=$NEXT_PUBLIC_API_BASE
+ENV API_PROXY_TARGET=$API_PROXY_TARGET
 ENV NEXT_TELEMETRY_DISABLED=1
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .

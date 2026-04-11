@@ -22,7 +22,7 @@ export function middleware(req: NextRequest) {
 
 export const config = {
   matcher: [
-    // Protect everything except Next.js internals and static files
-    "/((?!_next/static|_next/image|favicon.ico).*)",
+    // Protect app pages, but leave proxied backend routes and static media public.
+    "/((?!api|static|_next/static|_next/image|favicon.ico).*)",
   ],
 };
