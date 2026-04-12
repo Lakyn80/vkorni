@@ -26,6 +26,8 @@ STATIC_ATTACHMENT_PATH_PREFIX = "/data/attachments/"
 XENFORO_ATTACHMENT_PATH_PREFIX = "/attachments/"
 PRE_FRAMED_PREFIXES = ("/static/accepted_images/", "/static/exported_profiles/")
 INTERNAL_EXPORT_SUBDIR = "xenforo_full"
+EXPORT_GUARD_TAG = "[VKORNI_EXPORT_GUARD]"
+PUBLISH_REPAIR_ATTEMPTS = 3
 
 
 def _headers() -> dict:
@@ -288,6 +290,172 @@ def _format_xenforo_error(prefix: str, response: requests.Response) -> str:
     return f"{prefix} ({response.status_code})"
 
 
+def _delete_thread(thread_id: int, reason: str) -> bool:
+    base = VKORNI_BASE_URL.rstrip("/")
+    delete_reason = f"Automatic cleanup: {reason}"[:250]
+
+    for hard_delete in (True, False):
+        response = None
+        for attempt in range(1, HTTP_RETRY_ATTEMPTS + 1):
+            try:
+                response = requests.delete(
+                    f"{base}/threads/{thread_id}/",
+                    params={
+                        "hard_delete": 1 if hard_delete else 0,
+                        "reason": delete_reason,
+                    },
+                    headers=_headers(),
+                    timeout=20,
+                )
+            except requests.RequestException:
+                if attempt == HTTP_RETRY_ATTEMPTS:
+                    logger.exception(
+                        "%s cleanup delete request failed thread_id=%s hard_delete=%s",
+                        EXPORT_GUARD_TAG,
+                        thread_id,
+                        hard_delete,
+                    )
+                    break
+                logger.warning(
+                    "%s cleanup delete request retry thread_id=%s hard_delete=%s attempt=%d/%d",
+                    EXPORT_GUARD_TAG,
+                    thread_id,
+                    hard_delete,
+                    attempt,
+                    HTTP_RETRY_ATTEMPTS,
+                )
+                _sleep_before_retry(attempt)
+                continue
+
+            if response.ok:
+                logger.error(
+                    "%s deleted thread without verified attachment thread_id=%s hard_delete=%s reason=%s",
+                    EXPORT_GUARD_TAG,
+                    thread_id,
+                    hard_delete,
+                    reason,
+                )
+                return True
+
+            if attempt < HTTP_RETRY_ATTEMPTS and _should_retry_response(response.status_code):
+                logger.warning(
+                    "%s cleanup delete retry thread_id=%s hard_delete=%s status=%s attempt=%d/%d",
+                    EXPORT_GUARD_TAG,
+                    thread_id,
+                    hard_delete,
+                    response.status_code,
+                    attempt,
+                    HTTP_RETRY_ATTEMPTS,
+                )
+                _sleep_before_retry(attempt)
+                continue
+
+            logger.error(
+                "%s cleanup delete failed thread_id=%s hard_delete=%s status=%s body=%s",
+                EXPORT_GUARD_TAG,
+                thread_id,
+                hard_delete,
+                response.status_code if response is not None else "n/a",
+                (response.text[:500] if response is not None else ""),
+            )
+            break
+
+    return False
+
+
+def _verify_thread_attachment(thread_id: int, expected_attachment_id: int) -> tuple[bool, str]:
+    base = VKORNI_BASE_URL.rstrip("/")
+    response = None
+
+    for attempt in range(1, HTTP_RETRY_ATTEMPTS + 1):
+        try:
+            response = requests.get(
+                f"{base}/threads/{thread_id}/",
+                params={"with_first_post": 1},
+                headers=_headers(),
+                timeout=20,
+            )
+        except requests.RequestException as exc:
+            if attempt == HTTP_RETRY_ATTEMPTS:
+                logger.exception(
+                    "%s verification request failed thread_id=%s attachment_id=%s",
+                    EXPORT_GUARD_TAG,
+                    thread_id,
+                    expected_attachment_id,
+                )
+                return False, f"Thread verification request failed: {exc}"
+            logger.warning(
+                "%s verification request retry thread_id=%s attachment_id=%s attempt=%d/%d",
+                EXPORT_GUARD_TAG,
+                thread_id,
+                expected_attachment_id,
+                attempt,
+                HTTP_RETRY_ATTEMPTS,
+            )
+            _sleep_before_retry(attempt)
+            continue
+
+        if response.ok:
+            break
+
+        if attempt < HTTP_RETRY_ATTEMPTS and _should_retry_response(response.status_code):
+            logger.warning(
+                "%s verification retry thread_id=%s attachment_id=%s status=%s attempt=%d/%d",
+                EXPORT_GUARD_TAG,
+                thread_id,
+                expected_attachment_id,
+                response.status_code,
+                attempt,
+                HTTP_RETRY_ATTEMPTS,
+            )
+            _sleep_before_retry(attempt)
+            continue
+
+        return False, _format_xenforo_error("Thread verification failed", response)
+
+    if not response or not response.ok:
+        return False, "Thread verification failed without usable response"
+
+    try:
+        payload = response.json()
+    except ValueError:
+        snippet = response.text[:200].strip()
+        return False, f"Thread verification returned invalid JSON: {snippet or 'empty response'}"
+
+    first_post = payload.get("first_post") or {}
+    attach_count = int(first_post.get("attach_count") or 0)
+    attachments = first_post.get("Attachments") or []
+    attachment_ids = {int(item["attachment_id"]) for item in attachments if item.get("attachment_id")}
+
+    if expected_attachment_id in attachment_ids:
+        logger.info(
+            "%s verified attachment via attachment list thread_id=%s attachment_id=%s attach_count=%s",
+            EXPORT_GUARD_TAG,
+            thread_id,
+            expected_attachment_id,
+            attach_count,
+        )
+        return True, ""
+
+    if attach_count > 0 and not attachments:
+        logger.info(
+            "%s verified attachment via attach_count only thread_id=%s attachment_id=%s attach_count=%s",
+            EXPORT_GUARD_TAG,
+            thread_id,
+            expected_attachment_id,
+            attach_count,
+        )
+        return True, ""
+
+    if attach_count <= 0:
+        return False, f"Thread created without attachment in first post (thread_id={thread_id}, attachment_id={expected_attachment_id})"
+
+    return False, (
+        "Thread attachment mismatch after creation "
+        f"(thread_id={thread_id}, expected_attachment_id={expected_attachment_id}, actual_attachment_ids={sorted(attachment_ids)})"
+    )
+
+
 def _upload_attachment(file_path: str) -> dict | None:
     base = VKORNI_BASE_URL.rstrip("/")
     try:
@@ -385,6 +553,7 @@ def _upload_attachment(file_path: str) -> dict | None:
         logger.info("Attachment upload success attachment_id=%s filename=%s", attachment_id, filename)
         return {
             "attachment_id": attachment_id,
+            "attachment_key": key,
             "full_size_source": full_size_source,
         }
     except Exception:
@@ -591,14 +760,14 @@ def _prepare_export_photo(
     }
 
 
-def _create_thread(name: str, message: str, attachment_ids: list[int]) -> dict:
+def _create_thread(name: str, message: str, attachment_key: str | None = None) -> dict:
     form: dict[str, str] = {
         "node_id": str(int(VKORNI_NODE_ID)),
         "title": name,
         "message": message,
     }
-    for i, attachment_id in enumerate(attachment_ids):
-        form[f"attachment_ids[{i}]"] = str(attachment_id)
+    if attachment_key:
+        form["attachment_key"] = attachment_key
 
     body_bytes = urlencode(form, encoding="utf-8").encode("utf-8")
     response = None
@@ -715,72 +884,210 @@ def send_profile(
         )
 
     try:
-        upload = _upload_attachment(prepared["export_path"])
-        if not upload or not upload.get("attachment_id"):
-            upload_error = (upload or {}).get("error") or "XenForo attachment upload failed"
-            return _error_result(
-                f"{upload_error}; thread was not created",
-                source_photo_path=prepared.get("source_photo_path"),
-                source_photo_url=prepared.get("source_photo_url"),
-                image_origin=prepared.get("image_origin"),
-                selected_photo_url=preferred_source_photo_url or prepared.get("selected_photo_url"),
-                export_path=prepared.get("export_path"),
-                frame_id=prepared.get("frame_id"),
-            )
-
-        attachment_id = upload["attachment_id"]
-        xenforo_attachment_url = upload["full_size_source"]["download_url"]
-        stored_image = _download_and_store_internal_image(
-            attachment_id=attachment_id,
-            source=upload["full_size_source"],
-        )
-        if not stored_image:
-            logger.warning("Failed to persist full-size XenForo image attachment_id=%s; continuing with forum attachment only", attachment_id)
-
-        stable_image_path = stored_image["local_path"] if stored_image else None
         exported_selected_photo_url = prepared.get("selected_photo_url")
         if preferred_source_photo_url and exported_selected_photo_url == photo_list[0]:
             exported_selected_photo_url = preferred_source_photo_url
-        logger.info("Final post image source selected attachment_id=%s url=%s", attachment_id, xenforo_attachment_url)
-        message = _build_message(
-            text,
-            attachment_id=attachment_id,
-            birth=birth,
-            death=death,
-            attachment_url=xenforo_attachment_url,
-        )
 
-        result = _create_thread(name, message, [attachment_id])
-        if result.get("status") != "OK":
-            result.update(
-                {
-                    "attachment_id": attachment_id,
-                    "attachment_url": xenforo_attachment_url,
-                    "source_photo_path": prepared.get("source_photo_path"),
-                    "source_photo_url": prepared.get("source_photo_url"),
-                    "image_origin": prepared.get("image_origin"),
-                    "selected_photo_url": exported_selected_photo_url,
-                    "export_path": prepared.get("export_path"),
-                    "frame_id": prepared.get("frame_id"),
-                    "stable_image_path": stable_image_path,
-                }
+        last_error = "XenForo publish failed"
+        for publish_attempt in range(1, PUBLISH_REPAIR_ATTEMPTS + 1):
+            logger.info(
+                "%s publish attempt name=%s attempt=%d/%d export_path=%s selected_photo=%s",
+                EXPORT_GUARD_TAG,
+                name,
+                publish_attempt,
+                PUBLISH_REPAIR_ATTEMPTS,
+                prepared.get("export_path"),
+                exported_selected_photo_url,
             )
-            return result
 
-        result.update(
-            {
-                "attachment_id": attachment_id,
-                "attachment_url": xenforo_attachment_url,
-                "source_photo_path": prepared.get("source_photo_path"),
-                "source_photo_url": prepared.get("source_photo_url"),
-                "image_origin": prepared.get("image_origin"),
-                "selected_photo_url": exported_selected_photo_url,
-                "export_path": prepared.get("export_path"),
-                "frame_id": prepared.get("frame_id"),
-                "stable_image_path": stable_image_path,
-            }
+            upload = _upload_attachment(prepared["export_path"])
+            if not upload or not upload.get("attachment_id"):
+                upload_error = (upload or {}).get("error") or "XenForo attachment upload failed"
+                last_error = f"{upload_error}; thread was not created"
+                if publish_attempt < PUBLISH_REPAIR_ATTEMPTS:
+                    logger.warning(
+                        "%s upload failed, retrying whole publish name=%s attempt=%d/%d error=%s",
+                        EXPORT_GUARD_TAG,
+                        name,
+                        publish_attempt,
+                        PUBLISH_REPAIR_ATTEMPTS,
+                        last_error,
+                    )
+                    _sleep_before_retry(publish_attempt)
+                    continue
+                return _error_result(
+                    last_error,
+                    source_photo_path=prepared.get("source_photo_path"),
+                    source_photo_url=prepared.get("source_photo_url"),
+                    image_origin=prepared.get("image_origin"),
+                    selected_photo_url=exported_selected_photo_url,
+                    export_path=prepared.get("export_path"),
+                    frame_id=prepared.get("frame_id"),
+                )
+
+            attachment_id = upload["attachment_id"]
+            attachment_key = upload.get("attachment_key")
+            if not attachment_key:
+                last_error = f"XenForo attachment upload missing attachment_key for attachment_id={attachment_id}"
+                if publish_attempt < PUBLISH_REPAIR_ATTEMPTS:
+                    logger.error(
+                        "%s upload missing attachment_key, retrying name=%s attempt=%d/%d attachment_id=%s",
+                        EXPORT_GUARD_TAG,
+                        name,
+                        publish_attempt,
+                        PUBLISH_REPAIR_ATTEMPTS,
+                        attachment_id,
+                    )
+                    _sleep_before_retry(publish_attempt)
+                    continue
+                return _error_result(
+                    last_error,
+                    source_photo_path=prepared.get("source_photo_path"),
+                    source_photo_url=prepared.get("source_photo_url"),
+                    image_origin=prepared.get("image_origin"),
+                    selected_photo_url=exported_selected_photo_url,
+                    export_path=prepared.get("export_path"),
+                    frame_id=prepared.get("frame_id"),
+                )
+
+            xenforo_attachment_url = upload["full_size_source"]["download_url"]
+            stored_image = _download_and_store_internal_image(
+                attachment_id=attachment_id,
+                source=upload["full_size_source"],
+            )
+            if not stored_image:
+                logger.warning("Failed to persist full-size XenForo image attachment_id=%s; continuing with forum attachment only", attachment_id)
+
+            stable_image_path = stored_image["local_path"] if stored_image else None
+            logger.info("Final post image source selected attachment_id=%s url=%s", attachment_id, xenforo_attachment_url)
+            message = _build_message(
+                text,
+                attachment_id=attachment_id,
+                birth=birth,
+                death=death,
+                attachment_url=xenforo_attachment_url,
+            )
+
+            result = _create_thread(name, message, attachment_key)
+            if result.get("status") != "OK":
+                last_error = result.get("error") or "XenForo thread create failed"
+                if publish_attempt < PUBLISH_REPAIR_ATTEMPTS:
+                    logger.warning(
+                        "%s thread creation failed, retrying whole publish name=%s attempt=%d/%d attachment_id=%s error=%s",
+                        EXPORT_GUARD_TAG,
+                        name,
+                        publish_attempt,
+                        PUBLISH_REPAIR_ATTEMPTS,
+                        attachment_id,
+                        last_error,
+                    )
+                    _sleep_before_retry(publish_attempt)
+                    continue
+                result.update(
+                    {
+                        "attachment_id": attachment_id,
+                        "attachment_url": xenforo_attachment_url,
+                        "source_photo_path": prepared.get("source_photo_path"),
+                        "source_photo_url": prepared.get("source_photo_url"),
+                        "image_origin": prepared.get("image_origin"),
+                        "selected_photo_url": exported_selected_photo_url,
+                        "export_path": prepared.get("export_path"),
+                        "frame_id": prepared.get("frame_id"),
+                        "stable_image_path": stable_image_path,
+                    }
+                )
+                return result
+
+            thread_id = result.get("thread_id")
+            verified, verify_error = _verify_thread_attachment(thread_id, attachment_id)
+            if verified:
+                logger.info(
+                    "%s publish verified name=%s thread_id=%s attachment_id=%s attempt=%d/%d",
+                    EXPORT_GUARD_TAG,
+                    name,
+                    thread_id,
+                    attachment_id,
+                    publish_attempt,
+                    PUBLISH_REPAIR_ATTEMPTS,
+                )
+                result.update(
+                    {
+                        "attachment_id": attachment_id,
+                        "attachment_url": xenforo_attachment_url,
+                        "source_photo_path": prepared.get("source_photo_path"),
+                        "source_photo_url": prepared.get("source_photo_url"),
+                        "image_origin": prepared.get("image_origin"),
+                        "selected_photo_url": exported_selected_photo_url,
+                        "export_path": prepared.get("export_path"),
+                        "frame_id": prepared.get("frame_id"),
+                        "stable_image_path": stable_image_path,
+                    }
+                )
+                return result
+
+            logger.error(
+                "%s verification failed name=%s thread_id=%s attachment_id=%s attempt=%d/%d error=%s",
+                EXPORT_GUARD_TAG,
+                name,
+                thread_id,
+                attachment_id,
+                publish_attempt,
+                PUBLISH_REPAIR_ATTEMPTS,
+                verify_error,
+            )
+            cleanup_ok = _delete_thread(thread_id, verify_error)
+            if not cleanup_ok:
+                last_error = f"{verify_error}; cleanup failed for thread_id={thread_id}"
+                return _error_result(
+                    last_error,
+                    thread_id=thread_id,
+                    attachment_id=attachment_id,
+                    attachment_url=xenforo_attachment_url,
+                    source_photo_path=prepared.get("source_photo_path"),
+                    source_photo_url=prepared.get("source_photo_url"),
+                    image_origin=prepared.get("image_origin"),
+                    selected_photo_url=exported_selected_photo_url,
+                    export_path=prepared.get("export_path"),
+                    frame_id=prepared.get("frame_id"),
+                    stable_image_path=stable_image_path,
+                )
+
+            last_error = verify_error
+            if publish_attempt < PUBLISH_REPAIR_ATTEMPTS:
+                logger.warning(
+                    "%s cleaned broken thread and will retry name=%s thread_id=%s next_attempt=%d/%d",
+                    EXPORT_GUARD_TAG,
+                    name,
+                    thread_id,
+                    publish_attempt + 1,
+                    PUBLISH_REPAIR_ATTEMPTS,
+                )
+                _sleep_before_retry(publish_attempt)
+                continue
+
+            return _error_result(
+                last_error,
+                thread_id=thread_id,
+                attachment_id=attachment_id,
+                attachment_url=xenforo_attachment_url,
+                source_photo_path=prepared.get("source_photo_path"),
+                source_photo_url=prepared.get("source_photo_url"),
+                image_origin=prepared.get("image_origin"),
+                selected_photo_url=exported_selected_photo_url,
+                export_path=prepared.get("export_path"),
+                frame_id=prepared.get("frame_id"),
+                stable_image_path=stable_image_path,
+            )
+
+        return _error_result(
+            last_error,
+            source_photo_path=prepared.get("source_photo_path"),
+            source_photo_url=prepared.get("source_photo_url"),
+            image_origin=prepared.get("image_origin"),
+            selected_photo_url=exported_selected_photo_url,
+            export_path=prepared.get("export_path"),
+            frame_id=prepared.get("frame_id"),
         )
-        return result
     except Exception as exc:
         logger.exception("VKorni export failed")
         return _error_result(

@@ -47,6 +47,7 @@ def test_upload_attachment_returns_absolute_view_url(mock_post):
 
     assert result == {
         "attachment_id": 42,
+        "attachment_key": "upload-key",
         "full_size_source": {
             "download_url": "https://vkorni.com/attachments/example.42/?hash=abc",
             "filename": "example.webp",
@@ -82,6 +83,7 @@ def test_upload_attachment_strips_hash_from_static_attachment_url(mock_post):
 
     assert result == {
         "attachment_id": 42,
+        "attachment_key": "upload-key",
         "full_size_source": {
             "download_url": "https://vkorni.com/attachments/example.42/?hash=RkG2CrX64j",
             "filename": "example.webp",
@@ -126,6 +128,7 @@ def test_upload_attachment_rejects_hash_thumbnail_url(mock_post):
 })
 @patch("app.services.vkorny_export._upload_attachment", return_value={
     "attachment_id": 42,
+    "attachment_key": "upload-key",
     "full_size_source": {
         "download_url": "https://vkorni.com/attachments/example.42/?hash=abc",
         "filename": "example.webp",
@@ -137,8 +140,9 @@ def test_upload_attachment_rejects_hash_thumbnail_url(mock_post):
     "local_path": "/app/static/exported_profiles/xenforo_full/42-example.webp",
     "public_url": "https://backend.example/static/exported_profiles/xenforo_full/42-example.webp",
 })
+@patch("app.services.vkorny_export._verify_thread_attachment", return_value=(True, ""))
 @patch("app.services.vkorny_export.requests.post")
-def test_send_profile_creates_thread_only_after_internal_image_storage(mock_post, mock_store_image, mock_upload, mock_prepare):
+def test_send_profile_creates_thread_only_after_internal_image_storage(mock_post, mock_verify, mock_store_image, mock_upload, mock_prepare):
     mock_post.return_value = DummyResponse({"thread": {"thread_id": 99}})
 
     result = send_profile("Тест", "Биография", ["/static/photos/Test/a.webp"])
@@ -148,12 +152,13 @@ def test_send_profile_creates_thread_only_after_internal_image_storage(mock_post
     assert result["attachment_id"] == 42
     assert result["attachment_url"] == "https://vkorni.com/attachments/example.42/?hash=abc"
     sent_body = mock_post.call_args.kwargs["data"].decode("utf-8")
-    assert "attachment_ids%5B0%5D=42" in sent_body
+    assert "attachment_key=upload-key" in sent_body
     assert "%5BATTACH%3Dfull%5D42%5B%2FATTACH%5D" in sent_body
 
 
 @patch("app.services.vkorny_export.VKORNI_API_KEY", "test-key")
 @patch("app.services.vkorny_export.VKORNI_NODE_ID", "8")
+@patch("app.services.vkorny_export.time.sleep")
 @patch("app.services.vkorny_export._prepare_export_photo", return_value={
     "export_path": "/tmp/photo.jpg",
     "cleanup_paths": [],
@@ -163,7 +168,7 @@ def test_send_profile_creates_thread_only_after_internal_image_storage(mock_post
 })
 @patch("app.services.vkorny_export._upload_attachment", return_value=None)
 @patch("app.services.vkorny_export.requests.post")
-def test_send_profile_does_not_create_thread_when_attachment_upload_fails(mock_post, mock_upload, mock_prepare):
+def test_send_profile_does_not_create_thread_when_attachment_upload_fails(mock_post, mock_upload, mock_prepare, mock_sleep):
     result = send_profile("Тест", "Биография", ["/static/photos/Test/a.webp"])
 
     assert result["status"] == "ERROR"
@@ -182,6 +187,7 @@ def test_send_profile_does_not_create_thread_when_attachment_upload_fails(mock_p
 })
 @patch("app.services.vkorny_export._upload_attachment", return_value={
     "attachment_id": 42,
+    "attachment_key": "upload-key",
     "full_size_source": {
         "download_url": "https://vkorni.com/attachments/example.42/?hash=abc",
         "filename": "example.webp",
@@ -190,8 +196,9 @@ def test_send_profile_does_not_create_thread_when_attachment_upload_fails(mock_p
     },
 })
 @patch("app.services.vkorny_export._download_and_store_internal_image", return_value=None)
+@patch("app.services.vkorny_export._verify_thread_attachment", return_value=(True, ""))
 @patch("app.services.vkorny_export.requests.post")
-def test_send_profile_continues_when_internal_image_storage_fails(mock_post, mock_store_image, mock_upload, mock_prepare):
+def test_send_profile_continues_when_internal_image_storage_fails(mock_post, mock_verify, mock_store_image, mock_upload, mock_prepare):
     mock_post.return_value = DummyResponse({"thread": {"thread_id": 99}})
 
     result = send_profile("Тест", "Биография", ["/static/photos/Test/a.webp"])
@@ -201,6 +208,70 @@ def test_send_profile_continues_when_internal_image_storage_fails(mock_post, moc
     assert result["attachment_url"] == "https://vkorni.com/attachments/example.42/?hash=abc"
     assert result["stable_image_path"] is None
     mock_post.assert_called_once()
+
+
+@patch("app.services.vkorny_export.time.sleep")
+@patch("app.services.vkorny_export.VKORNI_API_KEY", "test-key")
+@patch("app.services.vkorny_export.VKORNI_NODE_ID", "8")
+@patch("app.services.vkorny_export._prepare_export_photo", return_value={
+    "export_path": "/tmp/photo.jpg",
+    "cleanup_paths": [],
+    "source_photo_path": "/static/photos/Test/a.webp",
+    "source_photo_url": None,
+    "image_origin": "framed_local",
+    "selected_photo_url": "/static/photos/Test/a.webp",
+    "frame_id": 8,
+})
+@patch("app.services.vkorny_export._upload_attachment", side_effect=[
+    {
+        "attachment_id": 42,
+        "attachment_key": "upload-key-1",
+        "full_size_source": {
+            "download_url": "https://vkorni.com/attachments/example.42/?hash=abc",
+            "filename": "example.webp",
+            "width": 800,
+            "height": 1000,
+        },
+    },
+    {
+        "attachment_id": 43,
+        "attachment_key": "upload-key-2",
+        "full_size_source": {
+            "download_url": "https://vkorni.com/attachments/example.43/?hash=def",
+            "filename": "example.webp",
+            "width": 800,
+            "height": 1000,
+        },
+    },
+])
+@patch("app.services.vkorny_export._download_and_store_internal_image", return_value=None)
+@patch("app.services.vkorny_export._create_thread", side_effect=[
+    {"status": "OK", "thread_id": 99, "url": "https://vkorni.com/threads/99/"},
+    {"status": "OK", "thread_id": 100, "url": "https://vkorni.com/threads/100/"},
+])
+@patch("app.services.vkorny_export._verify_thread_attachment", side_effect=[
+    (False, "Thread created without attachment in first post"),
+    (True, ""),
+])
+@patch("app.services.vkorny_export._delete_thread", return_value=True)
+def test_send_profile_retries_after_unverified_thread(
+    mock_delete,
+    mock_verify,
+    mock_create_thread,
+    mock_store_image,
+    mock_upload,
+    mock_prepare,
+    mock_sleep,
+):
+    result = send_profile("Тест", "Биография", ["/static/photos/Test/a.webp"])
+
+    assert result["status"] == "OK"
+    assert result["thread_id"] == 100
+    assert result["attachment_id"] == 43
+    mock_delete.assert_called_once_with(99, "Thread created without attachment in first post")
+    assert mock_create_thread.call_count == 2
+    assert mock_verify.call_count == 2
+    mock_sleep.assert_called_once()
 
 
 @patch("app.services.vkorny_export._download_source_photo", return_value="/tmp/downloaded.webp")
@@ -264,6 +335,7 @@ def test_upload_attachment_retries_transient_new_key_failure(mock_post, mock_sle
 
     assert result == {
         "attachment_id": 42,
+        "attachment_key": "upload-key",
         "full_size_source": {
             "download_url": "https://vkorni.com/attachments/example.42/?hash=abc",
             "filename": "example.webp",
@@ -314,7 +386,7 @@ def test_create_thread_retries_transient_failure(mock_post, mock_sleep):
         DummyResponse({"thread": {"thread_id": 99}}),
     ]
 
-    result = _create_thread("Тест", "Биография", [42])
+    result = _create_thread("Тест", "Биография", "upload-key")
 
     assert result == {
         "status": "OK",
@@ -323,3 +395,5 @@ def test_create_thread_retries_transient_failure(mock_post, mock_sleep):
     }
     assert mock_post.call_count == 2
     mock_sleep.assert_called_once()
+    sent_body = mock_post.call_args.kwargs["data"].decode("utf-8")
+    assert "attachment_key=upload-key" in sent_body
