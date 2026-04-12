@@ -428,7 +428,7 @@ def _verify_thread_attachment(thread_id: int, expected_attachment_id: int) -> tu
     attachment_ids = {int(item["attachment_id"]) for item in attachments if item.get("attachment_id")}
 
     if expected_attachment_id in attachment_ids:
-        logger.info(
+        logger.warning(
             "%s verified attachment via attachment list thread_id=%s attachment_id=%s attach_count=%s",
             EXPORT_GUARD_TAG,
             thread_id,
@@ -438,7 +438,7 @@ def _verify_thread_attachment(thread_id: int, expected_attachment_id: int) -> tu
         return True, ""
 
     if attach_count > 0 and not attachments:
-        logger.info(
+        logger.warning(
             "%s verified attachment via attach_count only thread_id=%s attachment_id=%s attach_count=%s",
             EXPORT_GUARD_TAG,
             thread_id,
@@ -890,7 +890,7 @@ def send_profile(
 
         last_error = "XenForo publish failed"
         for publish_attempt in range(1, PUBLISH_REPAIR_ATTEMPTS + 1):
-            logger.info(
+            logger.warning(
                 "%s publish attempt name=%s attempt=%d/%d export_path=%s selected_photo=%s",
                 EXPORT_GUARD_TAG,
                 name,
@@ -1001,7 +1001,7 @@ def send_profile(
             thread_id = result.get("thread_id")
             verified, verify_error = _verify_thread_attachment(thread_id, attachment_id)
             if verified:
-                logger.info(
+                logger.warning(
                     "%s publish verified name=%s thread_id=%s attachment_id=%s attempt=%d/%d",
                     EXPORT_GUARD_TAG,
                     name,
