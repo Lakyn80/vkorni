@@ -4,9 +4,17 @@ import os
 class Settings:
     # Wikipedia / Wikidata
     wiki_lang: str        = os.getenv("WIKI_LANG", "ru")
-    wiki_user_agent: str  = os.getenv("WIKI_USER_AGENT", "vkorni-bot/1.0")
+    wiki_user_agent: str  = os.getenv("WIKI_USER_AGENT", "vkorni-bot/1.0 (contact: admin@vkorni.ru)")
     wikidata_base: str    = os.getenv("WIKIDATA_BASE_URL", "https://www.wikidata.org")
     wiki_max_images: int  = int(os.getenv("WIKI_MAX_IMAGES", "5"))
+    wiki_request_timeout_seconds: int = int(os.getenv("WIKI_REQUEST_TIMEOUT_SECONDS", "10"))
+    wiki_image_timeout_seconds: int = int(os.getenv("WIKI_IMAGE_TIMEOUT_SECONDS", "15"))
+    wiki_request_delay_seconds: float = float(os.getenv("WIKI_REQUEST_DELAY_SECONDS", "0.5"))
+    wiki_request_jitter_seconds: float = float(os.getenv("WIKI_REQUEST_JITTER_SECONDS", "1.0"))
+    wiki_request_max_retries: int = int(os.getenv("WIKI_REQUEST_MAX_RETRIES", "5"))
+    wiki_request_backoff_seconds: float = float(os.getenv("WIKI_REQUEST_BACKOFF_SECONDS", "1.0"))
+    wiki_rate_limit_backoff_seconds: float = float(os.getenv("WIKI_RATE_LIMIT_BACKOFF_SECONDS", "5.0"))
+    wiki_rate_limit_per_sec: int = int(os.getenv("WIKI_RATE_LIMIT_PER_SEC", "1"))
 
     # Redis / Queue
     redis_url: str        = os.getenv("REDIS_URL", "redis://redis:6379/0")

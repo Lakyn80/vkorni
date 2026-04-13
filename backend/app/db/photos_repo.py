@@ -44,6 +44,12 @@ def init_db() -> None:
             ON photos(person_name);
             """
         )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_photos_source_url
+            ON photos(source_url);
+            """
+        )
         # Migrate existing tables that lack the status column
         try:
             conn.execute("ALTER TABLE photos ADD COLUMN status TEXT DEFAULT 'pending';")
@@ -67,6 +73,30 @@ def add_photo(person_name: str, file_path: str, source_url: str | None, descript
     except Exception:
         logger.exception("Failed to insert photo", extra={"person": person_name, "file_path": file_path})
         raise
+
+
+def find_photo_by_source_url(source_url: str) -> dict | None:
+    init_db()
+    with _conn() as conn:
+        row = conn.execute(
+            """
+            SELECT id, person_name, file_path, source_url, description
+            FROM photos
+            WHERE source_url = ?
+            ORDER BY id DESC
+            LIMIT 1;
+            """,
+            (source_url,),
+        ).fetchone()
+    if not row:
+        return None
+    return {
+        "id": row[0],
+        "person_name": row[1],
+        "file_path": row[2],
+        "source_url": row[3],
+        "description": row[4],
+    }
 
 
 def get_photos_by_person(person_name: str) -> list[dict]:
