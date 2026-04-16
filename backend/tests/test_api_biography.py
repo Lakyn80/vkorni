@@ -5,6 +5,7 @@ from fastapi.testclient import TestClient
 
 from app.main import app
 from app.db.redis_client import CacheUnavailableError
+from app.services.deepseek_service import DeepSeekBillingError
 
 client = TestClient(app)
 
@@ -107,6 +108,19 @@ def test_generate_short_text_returns_500(mock_set, mock_photos, mock_images,
     assert r.status_code == 500
 
 
+@patch("app.api.biography.get_biography", return_value=None)
+@patch("app.api.biography.fetch_person_from_wikipedia", return_value=FAKE_PERSON)
+@patch("app.api.biography.get_style_context", return_value="style")
+@patch(
+    "app.api.biography.generate_text",
+    side_effect=DeepSeekBillingError("У DeepSeek закончился API-кредит. Пополните баланс и повторите запрос."),
+)
+def test_generate_returns_503_with_billing_message(mock_gen, mock_style, mock_wiki, mock_cache):
+    r = client.post("/api/generate?name=Лев Яшин")
+    assert r.status_code == 503
+    assert "кредит" in r.text.lower()
+
+
 # ── /cache ─────────────────────────────────────────────────────────────────────
 
 @patch("app.api.biography.list_biographies", return_value=["Яшин", "Харламов"])
@@ -122,14 +136,14 @@ def test_cache_list_returns_503_when_cache_unavailable(mock_list):
     assert r.status_code == 503
 
 
-@patch("app.api.biography.get_biography", return_value={"name": "Яшин", "text": "bio", "photos": []})
+@patch("app.api.biography.get_biography_strict", return_value={"name": "Яшин", "text": "bio", "photos": []})
 def test_get_cached_profile(mock_get):
     r = client.get("/api/cache/Яшин")
     assert r.status_code == 200
     assert r.json()["name"] == "Яшин"
 
 
-@patch("app.api.biography.get_biography", return_value=None)
+@patch("app.api.biography.get_biography_strict", return_value=None)
 def test_get_cached_profile_not_found(mock_get):
     r = client.get("/api/cache/НетТакого")
     assert r.status_code == 404

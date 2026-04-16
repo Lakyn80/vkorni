@@ -14,6 +14,7 @@ Routes:
 import logging
 
 from fastapi import APIRouter, HTTPException, Query
+from fastapi.responses import PlainTextResponse
 
 from app.api.deps import validate_person_name, json_response
 from app.services.cache_service import (
@@ -21,7 +22,7 @@ from app.services.cache_service import (
     delete_biography, list_biographies, delete_all_biographies,
 )
 from app.services.wiki_service import fetch_person_from_wikipedia, fetch_person_images
-from app.services.deepseek_service import generate_text
+from app.services.deepseek_service import generate_text, DeepSeekServiceError
 from app.services.uniqueness_service import is_unique_enough
 from app.services.chroma_service import get_style_context
 from app.db.photos_repo import get_photos_by_person
@@ -88,7 +89,10 @@ def generate(
     tried_angles: list[str] = []
 
     for attempt in range(MAX_GENERATION_ATTEMPTS):
-        candidate, angle_used = generate_text(context, style, exclude_angle_ids=tried_angles)
+        try:
+            candidate, angle_used = generate_text(context, style, exclude_angle_ids=tried_angles)
+        except DeepSeekServiceError as exc:
+            return PlainTextResponse(str(exc), status_code=503)
         tried_angles.append(angle_used)
 
         if _is_text_too_short(candidate):

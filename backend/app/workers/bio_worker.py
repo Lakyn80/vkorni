@@ -17,7 +17,7 @@ from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_excep
 
 from app.services.batch_service import update_job
 from app.services.wiki_service import fetch_person_from_wikipedia, fetch_person_images
-from app.services.deepseek_service import generate_text
+from app.services.deepseek_service import generate_text, DeepSeekBillingError, DeepSeekServiceError
 from app.services.chroma_service import get_style_context
 from app.services.cache_service import set_biography
 from app.services.uniqueness_service import is_unique_enough
@@ -91,6 +91,12 @@ def process_biography(batch_id: str, name: str, style_name: str | None = None) -
                     context, style, exclude_angle_ids=tried_angles
                 )
                 tried_angles.append(angle_used)
+            except DeepSeekBillingError as exc:
+                return _fail(batch_id, name, str(exc))
+            except DeepSeekServiceError as exc:
+                logger.warning("[batch:%s] DeepSeek unavailable on attempt %d: %s", batch_id, attempt + 1, exc)
+                time.sleep(5 * (attempt + 1))
+                continue
             except Exception as exc:
                 logger.warning("[batch:%s] DeepSeek attempt %d failed: %s", batch_id, attempt + 1, exc)
                 time.sleep(5 * (attempt + 1))

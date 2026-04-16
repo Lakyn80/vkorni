@@ -5,11 +5,28 @@ function isAbsoluteUrl(value: string | null | undefined): value is string {
   return !!value && /^https?:\/\//i.test(value);
 }
 
+function getErrorMessage(text: string, status: number): string {
+  if (!text) return `HTTP ${status}`;
+
+  try {
+    const payload = JSON.parse(text) as { detail?: unknown; error?: unknown; message?: unknown };
+    for (const value of [payload.detail, payload.error, payload.message]) {
+      if (typeof value === "string" && value.trim()) {
+        return value.trim();
+      }
+    }
+  } catch {
+    // Non-JSON error body.
+  }
+
+  return text;
+}
+
 async function request<T>(url: string, options?: RequestInit): Promise<T> {
   const res = await fetch(url, options);
   if (!res.ok) {
     const text = await res.text();
-    throw new Error(text || `HTTP ${res.status}`);
+    throw new Error(getErrorMessage(text, res.status));
   }
   return res.json();
 }
