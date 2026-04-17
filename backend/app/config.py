@@ -18,6 +18,9 @@ class Settings:
 
     # Redis / Queue
     redis_url: str        = os.getenv("REDIS_URL", "redis://redis:6379/0")
+    bios_queue_name: str  = os.getenv("RQ_BIOS_QUEUE", "bios")
+    images_queue_name: str = os.getenv("RQ_IMAGES_QUEUE", "images")
+    exports_queue_name: str = os.getenv("RQ_EXPORTS_QUEUE", "exports")
     worker_max_retries: int  = int(os.getenv("WORKER_MAX_RETRIES", "3"))
     worker_retry_delay: int  = int(os.getenv("WORKER_RETRY_DELAY", "5"))
     bulk_export_item_timeout: int = int(os.getenv("BULK_EXPORT_ITEM_TIMEOUT", "900"))

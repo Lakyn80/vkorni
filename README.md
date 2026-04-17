@@ -121,6 +121,8 @@ Pokud chceš dva workery i v Docker Desktop, spusť:
 docker compose up -d --build --scale worker=2
 ```
 
+Hromadné exporty běží v oddělené RQ frontě `exports`, kterou obsluhuje služba `export-worker`, takže nečekají za dlouhými joby ve frontě `bios`.
+
 Runtime data se ukládají do Docker volumes, ne do repozitáře. Tím se do gitu netahají SQLite data, Chroma index ani vygenerované obrázky.
 
 | Služba | URL |

@@ -14,6 +14,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from app.api.deps import json_response, validate_person_name
+from app.config import settings
 from app.services.batch_service import (
     create_batch as _create_batch,
     get_batch_status,
@@ -44,7 +45,13 @@ def create_batch(payload: BatchRequest):
     try:
         batch_id = _create_batch(names)
         for name in names:
-            enqueue_job(process_biography, batch_id, name, payload.style_name, queue="bios")
+            enqueue_job(
+                process_biography,
+                batch_id,
+                name,
+                payload.style_name,
+                queue=settings.bios_queue_name,
+            )
     except Exception as exc:
         logger.error("Failed to create batch: %s", exc)
         raise HTTPException(status_code=503, detail="Queue unavailable — please retry later")
@@ -71,7 +78,7 @@ def retry_batch(batch_id: str):
     for name in failed:
         try:
             update_job(batch_id, name, status="queued")
-            enqueue_job(process_biography, batch_id, name, queue="bios")
+            enqueue_job(process_biography, batch_id, name, queue=settings.bios_queue_name)
             retried += 1
         except Exception as exc:
             logger.error("Failed to re-enqueue '%s': %s", name, exc)

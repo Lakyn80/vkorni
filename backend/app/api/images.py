@@ -39,7 +39,13 @@ def start_image_job(
 
     try:
         set_status(job_id, "queued")
-        enqueue_job(process_images_for_person, person_name, job_id, profession)
+        enqueue_job(
+            process_images_for_person,
+            person_name,
+            job_id,
+            profession,
+            queue=settings.images_queue_name,
+        )
     except Exception as exc:
         logger.error("Failed to enqueue image job for '%s': %s", person_name, exc)
         raise HTTPException(status_code=503, detail="Queue unavailable — please retry later")

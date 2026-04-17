@@ -3,6 +3,30 @@ from unittest.mock import patch
 from app.workers.export_worker import schedule_bulk_export, run_bulk_export_item, run_bulk_export_watchdog
 
 
+@patch("app.workers.export_worker.enqueue_job")
+def test_schedule_watchdog_uses_exports_queue(mock_enqueue):
+    from app.workers.export_worker import _schedule_watchdog
+
+    _schedule_watchdog("eid-1", delay_seconds=30)
+
+    assert mock_enqueue.call_args.kwargs["queue"] == "exports"
+    assert mock_enqueue.call_args.kwargs["delay_seconds"] == 30
+
+
+@patch("app.workers.export_worker.enqueue_job")
+@patch("app.workers.export_worker.update_job")
+@patch("app.workers.export_worker.get_bulk_export_job")
+def test_schedule_export_attempt_uses_exports_queue(mock_get_job, mock_update, mock_enqueue):
+    from app.workers.export_worker import _schedule_export_attempt
+
+    mock_get_job.return_value = {"status": "pending", "attempts": 0}
+
+    _schedule_export_attempt("eid-1", "A")
+
+    assert mock_update.call_args.kwargs["status"] == "queued"
+    assert mock_enqueue.call_args.kwargs["queue"] == "exports"
+
+
 @patch("app.workers.export_worker._schedule_watchdog")
 @patch("app.workers.export_worker._schedule_export_attempt")
 @patch("app.workers.export_worker.get_bulk_export")

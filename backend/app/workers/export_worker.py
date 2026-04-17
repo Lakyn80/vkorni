@@ -50,7 +50,7 @@ def _schedule_watchdog(export_id: str, delay_seconds: int | None = None) -> None
     enqueue_job(
         run_bulk_export_watchdog,
         export_id,
-        queue="bios",
+        queue=settings.exports_queue_name,
         job_timeout=max(settings.bulk_export_item_timeout, 300),
         delay_seconds=delay_seconds or settings.bulk_export_watchdog_interval_seconds,
     )
@@ -73,7 +73,7 @@ def _schedule_export_attempt(
         run_bulk_export_item,
         export_id,
         name,
-        queue="bios",
+        queue=settings.exports_queue_name,
         job_timeout=settings.bulk_export_item_timeout,
         delay_seconds=delay_seconds,
     )

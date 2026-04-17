@@ -50,7 +50,7 @@ def enqueue_job(
     Args:
         func: The function to execute.
         *args: Positional arguments for func.
-        queue: Queue name ("images" or "bios"). Default: "images".
+        queue: Queue name ("images", "bios", "exports"). Default: "images".
         **kwargs: Keyword arguments for func.
 
     Returns the job ID string, or raises RuntimeError if Redis is unavailable.

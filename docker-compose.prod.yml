@@ -18,7 +18,23 @@ services:
 
   worker:
     image: ghcr.io/lakyn80/vkorni-backend:latest
-    command: rq worker --with-scheduler --url ${REDIS_URL} bios images
+    command: rq worker --with-scheduler --url ${REDIS_URL} ${RQ_BIOS_QUEUE:-bios} ${RQ_IMAGES_QUEUE:-images}
+    volumes:
+      - /opt/vkorni/static/photos:/app/static/photos
+      - /opt/vkorni/static/accepted_images:/app/static/accepted_images
+      - /opt/vkorni/static/rejected_images:/app/static/rejected_images
+      - /opt/vkorni/static/exported_profiles:/app/static/exported_profiles
+      - /opt/vkorni/data:/app/app/data
+      - backend_chroma:/app/chroma_data
+    depends_on:
+      - redis
+    env_file:
+      - .env
+    restart: unless-stopped
+
+  export-worker:
+    image: ghcr.io/lakyn80/vkorni-backend:latest
+    command: rq worker --with-scheduler --url ${REDIS_URL} ${RQ_EXPORTS_QUEUE:-exports}
     volumes:
       - /opt/vkorni/static/photos:/app/static/photos
       - /opt/vkorni/static/accepted_images:/app/static/accepted_images
