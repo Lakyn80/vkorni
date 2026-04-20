@@ -1,7 +1,6 @@
 "use client";
 
 import { useState } from "react";
-import { useRouter } from "next/navigation";
 import { useCacheList } from "@/hooks/useCacheList";
 import { useProfiles } from "@/hooks/useProfiles";
 import { useBatch } from "@/hooks/useBatch";
@@ -10,14 +9,14 @@ import { GenerateForm } from "@/components/GenerateForm";
 import { CacheList } from "@/components/CacheList";
 import { ProfileCard } from "@/components/ProfileCard";
 import { BatchPanel } from "@/components/BatchPanel";
+import { clearAdminTokenCookie } from "@/lib/admin-cookie";
 
-function logout(router: ReturnType<typeof useRouter>) {
-  document.cookie = "vkorni_token=; path=/; max-age=0";
-  router.push("/admin/login");
+function logout() {
+  clearAdminTokenCookie();
+  window.location.replace("/admin/login");
 }
 
 export default function Page() {
-  const router = useRouter();
   const [input, setInput] = useState("");
 
   const { names, loading: cacheLoading, error: cacheError, refresh, addName, deleteName, deleteAll } = useCacheList();
@@ -58,7 +57,7 @@ export default function Page() {
               ● Онлайн
             </span>
             <button
-              onClick={() => logout(router)}
+              onClick={logout}
               className="text-xs text-ink/40 hover:text-red-500 transition-colors"
             >
               Выйти

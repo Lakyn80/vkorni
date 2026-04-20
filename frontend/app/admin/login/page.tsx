@@ -1,11 +1,10 @@
 "use client";
 
 import { useState } from "react";
-import { useRouter } from "next/navigation";
 import { api } from "@/lib/api";
+import { setAdminTokenCookie } from "@/lib/admin-cookie";
 
 export default function LoginPage() {
-  const router = useRouter();
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
@@ -17,9 +16,8 @@ export default function LoginPage() {
     setError("");
     try {
       const data = await api.adminLogin(username, password);
-      // Store token in cookie (readable by Next.js middleware)
-      document.cookie = `vkorni_token=${data.access_token}; path=/; SameSite=Lax; max-age=${60 * 60}`;
-      router.push("/");
+      setAdminTokenCookie(data.access_token);
+      window.location.replace("/admin");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Неверные учетные данные");
     } finally {

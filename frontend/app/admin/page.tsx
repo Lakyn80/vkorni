@@ -1,21 +1,11 @@
 "use client";
 
 import { useState } from "react";
-import { useRouter } from "next/navigation";
 import { api } from "@/lib/api";
+import { clearAdminTokenCookie, getAdminTokenCookie } from "@/lib/admin-cookie";
 import StoredProfilesPanel from "@/components/StoredProfilesPanel";
 
-function getToken(): string {
-  const match = document.cookie.match(/(?:^|;\s*)vkorni_token=([^;]+)/);
-  return match ? match[1] : "";
-}
-
-function clearToken() {
-  document.cookie = "vkorni_token=; path=/; max-age=0";
-}
-
 export default function AdminPage() {
-  const router = useRouter();
   const [cpCurrent, setCpCurrent] = useState("");
   const [cpNew, setCpNew] = useState("");
   const [cpConfirm, setCpConfirm] = useState("");
@@ -23,8 +13,8 @@ export default function AdminPage() {
   const [busy, setBusy] = useState(false);
 
   function logout() {
-    clearToken();
-    router.push("/admin/login");
+    clearAdminTokenCookie();
+    window.location.replace("/admin/login");
   }
 
   async function handleChangePassword(e: React.FormEvent) {
@@ -36,7 +26,7 @@ export default function AdminPage() {
     }
     setBusy(true);
     try {
-      await api.adminChangePassword(getToken(), cpCurrent, cpNew);
+      await api.adminChangePassword(getAdminTokenCookie(), cpCurrent, cpNew);
       setResult({ ok: true, msg: "Пароль изменен" });
       setCpCurrent(""); setCpNew(""); setCpConfirm("");
     } catch (err) {
