@@ -2,7 +2,9 @@ import os
 import tempfile
 from unittest.mock import patch
 
-from app.services.vkorny_export import _absolute_attachment_url, _create_thread, _prepare_export_photo, _upload_attachment, send_profile
+from PIL import Image
+
+from app.services.vkorny_export import _absolute_attachment_url, _create_thread, _download_source_photo, _prepare_export_photo, _upload_attachment, send_profile
 
 
 class DummyResponse:
@@ -15,6 +17,14 @@ class DummyResponse:
 
     def json(self):
         return self._payload
+
+
+def _make_temp_image(suffix: str = ".jpg") -> str:
+    fd, path = tempfile.mkstemp(suffix=suffix)
+    os.close(fd)
+    image_format = "WEBP" if suffix.lower() == ".webp" else "JPEG"
+    Image.new("RGB", (10, 10), color=(255, 0, 0)).save(path, image_format)
+    return path
 
 
 def test_absolute_attachment_url_normalizes_relative_path():
@@ -38,8 +48,7 @@ def test_upload_attachment_returns_absolute_view_url(mock_post):
         ),
     ]
 
-    fd, path = tempfile.mkstemp(suffix=".jpg")
-    os.close(fd)
+    path = _make_temp_image(".jpg")
     try:
         result = _upload_attachment(path)
     finally:
@@ -74,8 +83,7 @@ def test_upload_attachment_strips_hash_from_static_attachment_url(mock_post):
         ),
     ]
 
-    fd, path = tempfile.mkstemp(suffix=".jpg")
-    os.close(fd)
+    path = _make_temp_image(".jpg")
     try:
         result = _upload_attachment(path)
     finally:
@@ -107,8 +115,7 @@ def test_upload_attachment_rejects_hash_thumbnail_url(mock_post):
         ),
     ]
 
-    fd, path = tempfile.mkstemp(suffix=".jpg")
-    os.close(fd)
+    path = _make_temp_image(".jpg")
     try:
         result = _upload_attachment(path)
     finally:
@@ -307,6 +314,61 @@ def test_prepare_export_photo_falls_back_to_next_existing_local_photo(mock_frame
     assert result["image_origin"] == "framed_local"
 
 
+@patch("app.services.vkorny_export.requests.get")
+def test_download_source_photo_tries_original_for_wikimedia_thumb(mock_get):
+    thumb_url = (
+        "https://upload.wikimedia.org/wikipedia/ru/thumb/5/5c/"
+        "Test.jpg/3840px-Test.jpg"
+    )
+    original_url = "https://upload.wikimedia.org/wikipedia/ru/5/5c/Test.jpg"
+    mock_get.return_value = DummyResponse({}, ok=True, content=b"image")
+
+    path = _download_source_photo(thumb_url)
+
+    try:
+        assert path is not None
+        with open(path, "rb") as fh:
+            assert fh.read() == b"image"
+    finally:
+        if path and os.path.exists(path):
+            os.remove(path)
+    mock_get.assert_called_once_with(original_url, timeout=20)
+
+
+@patch("app.services.vkorny_export.requests.post")
+def test_upload_attachment_converts_to_temp_webp_and_cleans_up(mock_post):
+    mock_post.side_effect = [
+        DummyResponse({"key": "upload-key"}),
+        DummyResponse(
+            {
+                "attachment": {
+                    "attachment_id": 42,
+                    "direct_url": "/attachments/example.42/?hash=abc",
+                    "filename": "example.webp",
+                    "width": 800,
+                    "height": 1000,
+                }
+            }
+        ),
+    ]
+
+    path = _make_temp_image(".jpg")
+    try:
+        result = _upload_attachment(path)
+        upload_call = mock_post.call_args_list[1]
+        uploaded_name = upload_call.kwargs["files"]["attachment"][0]
+        uploaded_file = upload_call.kwargs["files"]["attachment"][1]
+        uploaded_mime = upload_call.kwargs["files"]["attachment"][2]
+    finally:
+        os.remove(path)
+
+    assert result is not None
+    assert uploaded_name.endswith(".webp")
+    assert uploaded_mime == "image/webp"
+    assert uploaded_file.name.endswith(".webp")
+    assert not os.path.exists(uploaded_file.name)
+
+
 @patch("app.services.vkorny_export.time.sleep")
 @patch("app.services.vkorny_export.requests.post")
 def test_upload_attachment_retries_transient_new_key_failure(mock_post, mock_sleep):
@@ -326,8 +388,7 @@ def test_upload_attachment_retries_transient_new_key_failure(mock_post, mock_sle
         ),
     ]
 
-    fd, path = tempfile.mkstemp(suffix=".jpg")
-    os.close(fd)
+    path = _make_temp_image(".jpg")
     try:
         result = _upload_attachment(path)
     finally:
@@ -366,8 +427,7 @@ def test_upload_attachment_surfaces_xenforo_error_code(mock_post):
         ),
     ]
 
-    fd, path = tempfile.mkstemp(suffix=".jpg")
-    os.close(fd)
+    path = _make_temp_image(".jpg")
     try:
         result = _upload_attachment(path)
     finally:

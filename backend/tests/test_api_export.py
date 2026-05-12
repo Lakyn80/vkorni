@@ -42,9 +42,8 @@ def test_export_missing_fields():
 
 # ── /upload ────────────────────────────────────────────────────────────────────
 
-@patch("app.api.export.convert_to_webp", side_effect=lambda p: p)
 @patch("app.api.export.os.makedirs")
-def test_upload_unsupported_extension(mock_makedirs, mock_webp):
+def test_upload_unsupported_extension(mock_makedirs):
     data = io.BytesIO(b"fake gif data")
     r = client.post("/api/upload?name=Яшин",
                     files={"file": ("photo.gif", data, "image/gif")})
@@ -52,10 +51,9 @@ def test_upload_unsupported_extension(mock_makedirs, mock_webp):
     assert "Unsupported" in r.json()["detail"]
 
 
-@patch("app.api.export.convert_to_webp", side_effect=lambda p: p)
 @patch("builtins.open", create=True)
 @patch("app.api.export.os.makedirs")
-def test_upload_jpg_accepted(mock_makedirs, mock_open, mock_webp):
+def test_upload_jpg_accepted(mock_makedirs, mock_open):
     mock_open.return_value.__enter__ = lambda s: s
     mock_open.return_value.__exit__ = lambda *a: False
     mock_open.return_value.write = lambda b: None
@@ -65,3 +63,4 @@ def test_upload_jpg_accepted(mock_makedirs, mock_open, mock_webp):
                     files={"file": ("photo.jpg", data, "image/jpeg")})
     assert r.status_code == 200
     assert "url" in r.json()
+    assert r.json()["url"].endswith(".jpg")

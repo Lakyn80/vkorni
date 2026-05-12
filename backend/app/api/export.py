@@ -20,7 +20,6 @@ from app.config import settings
 from app.db.stored_profiles_repo import add_stored_profile_attempt, get_stored_profile, list_stored_profiles
 from app.services.bulk_export_service import create_bulk_export, get_bulk_export
 from app.services.export_service import export_profile_to_vkorni
-from app.services.wiki_service import convert_to_webp
 from app.workers.export_worker import schedule_bulk_export
 
 logger = logging.getLogger(__name__)
@@ -70,8 +69,6 @@ def _store_upload(file: UploadFile, person_name: str | None) -> str:
     with open(file_path, "wb") as out:
         out.write(file.file.read())
 
-    file_path = convert_to_webp(file_path)
-    filename = os.path.basename(file_path)
     return f"/static/photos/{folder}/{filename}"
 
 

@@ -26,6 +26,7 @@ register_heif_opener()  # enable HEIC/HEIF support in Pillow
 
 from app.config import settings
 from app.db.photos_repo import add_photo, find_photo_by_source_url
+from app.services.wikimedia_urls import wikimedia_download_candidates
 
 logger = logging.getLogger(__name__)
 
@@ -389,32 +390,34 @@ def _safe_get_pageimage(title: str) -> Optional[str]:
 
 
 def _download_wikimedia_image(url: str, file_path: str) -> str | None:
-    response = _request_wikimedia(
-        url,
-        headers=IMAGE_HEADERS,
-        timeout=settings.wiki_image_timeout_seconds,
-        purpose="image download",
-        stream=True,
-    )
-    if response is None:
-        return None
+    for candidate_url in wikimedia_download_candidates(url):
+        response = _request_wikimedia(
+            candidate_url,
+            headers=IMAGE_HEADERS,
+            timeout=settings.wiki_image_timeout_seconds,
+            purpose="image download",
+            stream=True,
+        )
+        if response is None:
+            continue
 
-    try:
-        with open(file_path, "wb") as f:
-            for chunk in response.iter_content(chunk_size=8192):
-                if chunk:
-                    f.write(chunk)
-        return file_path
-    except Exception as exc:
-        logger.warning("Failed to persist Wikimedia image %s to %s: %s", url, file_path, exc)
         try:
-            if os.path.exists(file_path):
-                os.remove(file_path)
-        except OSError:
-            logger.warning("Failed to remove partial Wikimedia download %s", file_path)
-        return None
-    finally:
-        response.close()
+            with open(file_path, "wb") as f:
+                for chunk in response.iter_content(chunk_size=8192):
+                    if chunk:
+                        f.write(chunk)
+            return file_path
+        except Exception as exc:
+            logger.warning("Failed to persist Wikimedia image %s to %s: %s", candidate_url, file_path, exc)
+            try:
+                if os.path.exists(file_path):
+                    os.remove(file_path)
+            except OSError:
+                logger.warning("Failed to remove partial Wikimedia download %s", file_path)
+            return None
+        finally:
+            response.close()
+    return None
 
 
 def convert_to_webp(file_path: str) -> str:
@@ -667,17 +670,9 @@ def fetch_person_images(name: str) -> list[dict]:
 
             try:
                 center_face_in_image(downloaded_path)
-                file_path = convert_to_webp(downloaded_path)
             except Exception as exc:
                 logger.warning("Image post-processing failed for %s: %s", url, exc)
                 continue
-
-            file_name = os.path.basename(file_path)
-            rel_path = f"/static/photos/{folder_name}/{file_name}"
-
-        if not file_path.endswith(".webp") and os.path.exists(file_path):
-            file_path = convert_to_webp(file_path)
-            rel_path = _abs_photo_path_to_rel_path(file_path)
 
         description = info.get("description")
         add_photo(name, rel_path, url, description)

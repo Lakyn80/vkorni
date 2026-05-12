@@ -196,6 +196,56 @@ class WikiServiceTests(unittest.TestCase):
         download_mock.assert_not_called()
         add_photo_mock.assert_called_once_with("Test Person", cached_rel_path, "https://upload.wikimedia.org/Test.jpg", None)
 
+    def test_fetch_person_images_keeps_original_download_extension(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch.object(wiki_service, "STATIC_PHOTOS_DIR", tmp), \
+                 patch.object(wiki_service, "MAX_IMAGES", 1), \
+                 patch("app.services.wiki_service._safe_search_wiki_title", return_value="Test Person"), \
+                 patch("app.services.wiki_service._request_wikimedia_json", return_value={"originalimage": {"source": "https://upload.wikimedia.org/Test.jpg"}}), \
+                 patch("app.services.wiki_service.center_face_in_image") as center_mock, \
+                 patch("app.services.wiki_service.convert_to_webp") as convert_mock, \
+                 patch("app.services.wiki_service.add_photo") as add_photo_mock:
+
+                def fake_download(url, file_path):
+                    with open(file_path, "wb") as fh:
+                        fh.write(b"image")
+                    return file_path
+
+                with patch("app.services.wiki_service._download_wikimedia_image", side_effect=fake_download):
+                    images = wiki_service.fetch_person_images("Test Person")
+
+        self.assertEqual(images, [{
+            "file_path": "/static/photos/Test_Person/Test.jpg",
+            "source_url": "https://upload.wikimedia.org/Test.jpg",
+            "description": None,
+        }])
+        center_mock.assert_called_once()
+        convert_mock.assert_not_called()
+        add_photo_mock.assert_called_once_with(
+            "Test Person",
+            "/static/photos/Test_Person/Test.jpg",
+            "https://upload.wikimedia.org/Test.jpg",
+            None,
+        )
+
+    @patch("app.services.wiki_service._request_wikimedia")
+    def test_download_wikimedia_image_tries_original_for_large_thumb(self, request_mock):
+        response = DummyResponse({})
+        thumb_url = (
+            "https://upload.wikimedia.org/wikipedia/ru/thumb/5/5c/"
+            "Test.jpg/3840px-Test.jpg"
+        )
+        original_url = "https://upload.wikimedia.org/wikipedia/ru/5/5c/Test.jpg"
+        with tempfile.TemporaryDirectory() as tmp:
+            out = os.path.join(tmp, "test.jpg")
+            request_mock.side_effect = [None, response]
+
+            result = wiki_service._download_wikimedia_image(thumb_url, out)
+
+        self.assertEqual(result, out)
+        self.assertEqual(request_mock.call_args_list[0].args[0], original_url)
+        self.assertEqual(request_mock.call_args_list[1].args[0], thumb_url)
+
 
 if __name__ == "__main__":
     unittest.main()

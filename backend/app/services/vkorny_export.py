@@ -12,6 +12,7 @@ from PIL import Image
 
 from app.config import settings
 from app.services.cache_service import get_biography
+from app.services.wikimedia_urls import wikimedia_download_candidates
 
 logger = logging.getLogger(__name__)
 
@@ -456,8 +457,35 @@ def _verify_thread_attachment(thread_id: int, expected_attachment_id: int) -> tu
     )
 
 
+def _prepare_attachment_upload_file(file_path: str) -> tuple[str, str | None] | None:
+    if file_path.lower().endswith(".webp"):
+        return file_path, None
+
+    fd, temp_path = tempfile.mkstemp(prefix="vkorni-upload-", suffix=".webp")
+    os.close(fd)
+
+    try:
+        with Image.open(file_path) as image:
+            image = image.convert("RGBA") if image.mode in ("RGBA", "LA", "P") else image.convert("RGB")
+            image.save(temp_path, "WEBP", quality=88, method=4)
+        return temp_path, temp_path
+    except Exception:
+        logger.exception("Final WebP conversion failed for %s", file_path)
+        if os.path.exists(temp_path):
+            try:
+                os.remove(temp_path)
+            except OSError:
+                logger.warning("Failed to remove temporary WebP upload file: %s", temp_path)
+        return None
+
+
 def _upload_attachment(file_path: str) -> dict | None:
     base = VKORNI_BASE_URL.rstrip("/")
+    prepared = _prepare_attachment_upload_file(file_path)
+    if prepared is None:
+        return {"error": f"Final WebP conversion failed for {os.path.basename(file_path)}"}
+
+    upload_path, cleanup_path = prepared
     try:
         key = None
         for attempt in range(1, HTTP_RETRY_ATTEMPTS + 1):
@@ -498,12 +526,12 @@ def _upload_attachment(file_path: str) -> dict | None:
             logger.error("XenForo new-key response missing key")
             return None
 
-        filename = os.path.basename(file_path)
-        mime = "image/jpeg" if file_path.lower().endswith((".jpg", ".jpeg")) else "image/webp"
+        filename = os.path.basename(upload_path)
+        mime = "image/webp"
         r2 = None
         for attempt in range(1, HTTP_RETRY_ATTEMPTS + 1):
             try:
-                with open(file_path, "rb") as f:
+                with open(upload_path, "rb") as f:
                     r2 = requests.post(
                         f"{base}/attachments/",
                         params={"key": key},
@@ -559,6 +587,12 @@ def _upload_attachment(file_path: str) -> dict | None:
     except Exception:
         logger.exception("XenForo attachment upload error")
         return {"error": "XenForo attachment upload error"}
+    finally:
+        if cleanup_path and os.path.exists(cleanup_path):
+            try:
+                os.remove(cleanup_path)
+            except OSError:
+                logger.warning("Failed to remove temporary WebP upload file: %s", cleanup_path)
 
 
 def _build_message(
@@ -612,55 +646,60 @@ def _extract_birth_from_text(text: str) -> str | None:
 
 
 def _download_source_photo(url: str) -> str | None:
-    path = None
-    try:
-        parsed = urlparse(url)
-        suffix = os.path.splitext(unquote(os.path.basename(parsed.path)))[1] or ".img"
-        fd, path = tempfile.mkstemp(prefix="vkorni-export-", suffix=suffix)
-        os.close(fd)
+    for candidate_url in wikimedia_download_candidates(url):
+        path = None
+        try:
+            parsed = urlparse(candidate_url)
+            suffix = os.path.splitext(unquote(os.path.basename(parsed.path)))[1] or ".img"
+            fd, path = tempfile.mkstemp(prefix="vkorni-export-", suffix=suffix)
+            os.close(fd)
 
-        response = None
-        for attempt in range(1, HTTP_RETRY_ATTEMPTS + 1):
-            try:
-                response = requests.get(url, timeout=20)
-            except requests.RequestException:
-                if attempt == HTTP_RETRY_ATTEMPTS:
-                    raise
-                logger.warning("Source photo download request failed for %s, retry %d/%d", url, attempt, HTTP_RETRY_ATTEMPTS)
-                _sleep_before_retry(attempt)
-                continue
+            response = None
+            for attempt in range(1, HTTP_RETRY_ATTEMPTS + 1):
+                try:
+                    response = requests.get(candidate_url, timeout=20)
+                except requests.RequestException:
+                    if attempt == HTTP_RETRY_ATTEMPTS:
+                        raise
+                    logger.warning("Source photo download request failed for %s, retry %d/%d", candidate_url, attempt, HTTP_RETRY_ATTEMPTS)
+                    _sleep_before_retry(attempt)
+                    continue
 
-            if response.ok:
+                if response.ok:
+                    break
+
+                if attempt < HTTP_RETRY_ATTEMPTS and _should_retry_response(response.status_code):
+                    logger.warning(
+                        "Source photo download returned %s for %s, retry %d/%d",
+                        response.status_code,
+                        candidate_url,
+                        attempt,
+                        HTTP_RETRY_ATTEMPTS,
+                    )
+                    _sleep_before_retry(attempt)
+                    continue
                 break
 
-            if attempt < HTTP_RETRY_ATTEMPTS and _should_retry_response(response.status_code):
-                logger.warning(
-                    "Source photo download returned %s for %s, retry %d/%d",
-                    response.status_code,
-                    url,
-                    attempt,
-                    HTTP_RETRY_ATTEMPTS,
-                )
-                _sleep_before_retry(attempt)
+            if not response or not response.ok:
+                status = response.status_code if response is not None else "n/a"
+                logger.error("Source photo download failed: %s %s", status, candidate_url)
+                if path and os.path.exists(path):
+                    os.remove(path)
                 continue
-            break
 
-        if not response or not response.ok:
-            status = response.status_code if response is not None else "n/a"
-            logger.error("Source photo download failed: %s %s", status, url)
-            return None
-
-        with open(path, "wb") as f:
-            f.write(response.content)
-        return path
-    except Exception:
-        logger.exception("Source photo download failed", extra={"url": url})
-        if path and os.path.exists(path):
-            try:
-                os.remove(path)
-            except OSError:
-                logger.warning("Failed to remove temporary downloaded photo: %s", path)
-        return None
+            with open(path, "wb") as f:
+                f.write(response.content)
+            return path
+        except Exception:
+            logger.exception("Source photo download failed", extra={"url": candidate_url})
+            if path and os.path.exists(path):
+                try:
+                    os.remove(path)
+                except OSError:
+                    logger.warning("Failed to remove temporary downloaded photo: %s", path)
+    if url:
+        logger.error("Source photo download failed for all candidates: %s", url)
+    return None
 
 
 def _prepare_export_photo(
