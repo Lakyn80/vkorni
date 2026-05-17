@@ -14,7 +14,6 @@ Routes:
 import logging
 
 from fastapi import APIRouter, HTTPException, Query
-from fastapi.responses import PlainTextResponse
 
 from app.api.deps import validate_person_name, json_response
 from app.services.cache_service import (
@@ -22,7 +21,13 @@ from app.services.cache_service import (
     delete_biography, list_biographies, delete_all_biographies,
 )
 from app.services.wiki_service import fetch_person_from_wikipedia, fetch_person_images
-from app.services.deepseek_service import generate_text, DeepSeekServiceError
+from app.services.deepseek_service import generate_text
+from app.services.biography_service import (
+    build_biography_response,
+    build_biography_response_from_cache,
+    generate_biography_text,
+    normalize_requested_name,
+)
 from app.services.uniqueness_service import is_unique_enough
 from app.services.chroma_service import get_style_context
 from app.db.photos_repo import get_photos_by_person
@@ -32,18 +37,9 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api", tags=["biography"])
 
-MAX_GENERATION_ATTEMPTS = 3
-MIN_WORD_COUNT = 400
-
 
 def _cache_unavailable() -> HTTPException:
     return HTTPException(status_code=503, detail="Cache unavailable — please retry later")
-
-
-def _is_text_too_short(text: str) -> bool:
-    if not text:
-        return True
-    return len(text.split()) < MIN_WORD_COUNT or len([p for p in text.split("\n") if p.strip()]) < 2
 
 
 def _build_photo_maps(downloaded: list[dict], photo_rows: list[dict], person: dict) -> tuple[list, dict]:
@@ -61,72 +57,89 @@ def _build_photo_maps(downloaded: list[dict], photo_rows: list[dict], person: di
 
 @router.post("/generate")
 def generate(
-    name: str,
+    name: str | None = None,
     force_regenerate: bool = Query(False, alias="FORCE_REGENERATE"),
     style_name: str | None = Query(None, alias="STYLE_NAME"),
 ):
-    person_name = validate_person_name(name)
+    person_name = normalize_requested_name(name)
 
     if not force_regenerate:
-        cached = get_biography(person_name)
-        if cached:
-            return json_response(cached)
-
-    person = fetch_person_from_wikipedia(person_name)
-    if not person:
-        raise HTTPException(status_code=404, detail="Person not found on Wikipedia")
-
-    wiki_source = person.get("summary_text", "")
-    context = (
-        f"Имя: {person.get('name')}\n"
-        f"Годы жизни: {person.get('birth')}–{person.get('death')}\n"
-        f"Краткое описание: {wiki_source}\n"
-    )
-    style = get_style_context(style_name)
-
-    text = ""
-    candidate = ""
-    tried_angles: list[str] = []
-
-    for attempt in range(MAX_GENERATION_ATTEMPTS):
         try:
-            candidate, angle_used = generate_text(context, style, exclude_angle_ids=tried_angles)
-        except DeepSeekServiceError as exc:
-            return PlainTextResponse(str(exc), status_code=503)
-        tried_angles.append(angle_used)
+            cached = get_biography(person_name) if person_name else None
+        except CacheUnavailableError:
+            logger.warning("Cache read failed for '%s'; continuing without cache", person_name)
+            cached = None
+        except Exception:
+            logger.exception("Unexpected cache read failure for '%s'", person_name)
+            cached = None
+        if cached:
+            return json_response(build_biography_response_from_cache(cached))
 
-        if _is_text_too_short(candidate):
-            logger.warning("Attempt %d: text too short", attempt + 1)
-            continue
+    person: dict | None = None
+    if person_name:
+        try:
+            person = fetch_person_from_wikipedia(person_name)
+        except Exception:
+            logger.exception("Wikipedia fetch failed for '%s'", person_name)
+            person = None
 
-        if is_unique_enough(candidate, wiki_source):
-            text = candidate
-            logger.info("Accepted text on attempt %d (angle=%s)", attempt + 1, angle_used)
-            break
-
-        logger.warning("Attempt %d: too similar to Wikipedia (angle=%s)", attempt + 1, angle_used)
-
-    if not text:
-        text = candidate
-
-    if _is_text_too_short(text):
-        raise HTTPException(status_code=500, detail="Generated text is too short")
-
-    downloaded = fetch_person_images(person_name)
-    photo_rows = get_photos_by_person(person_name)
-    photos, photo_sources = _build_photo_maps(downloaded, photo_rows, person)
-
-    birth = person.get("birth")
-    death = person.get("death")
     try:
-        set_biography(person_name, text, photos, birth=birth, death=death, photo_sources=photo_sources)
+        style = get_style_context(style_name)
+    except Exception:
+        logger.exception("Style lookup failed for '%s'", style_name)
+        style = None
+
+    generation = generate_biography_text(
+        source_person=person,
+        requested_name=person_name,
+        style=style,
+        llm_generate=generate_text,
+        uniqueness_check=is_unique_enough,
+    )
+
+    downloaded: list[dict] = []
+    photo_rows: list[dict] = []
+    if person_name and person:
+        try:
+            downloaded = fetch_person_images(person_name)
+        except Exception:
+            logger.exception("Photo fetch failed for '%s'", person_name)
+            downloaded = []
+        try:
+            photo_rows = get_photos_by_person(person_name)
+        except Exception:
+            logger.exception("Photo repository lookup failed for '%s'", person_name)
+            photo_rows = []
+
+    photos, photo_sources = _build_photo_maps(downloaded, photo_rows, person or {})
+
+    try:
+        if person_name:
+            set_biography(
+                person_name,
+                generation["biography"],
+                photos,
+                birth=generation["birth"],
+                death=generation["death"],
+                photo_sources=photo_sources,
+            )
     except CacheUnavailableError:
         logger.warning("Cache write failed for '%s'; returning uncached profile", person_name)
+    except Exception:
+        logger.exception("Unexpected cache write failure for '%s'", person_name)
 
-    return json_response({
-        "name": person_name, "text": text, "photos": photos,
-        "birth": birth, "death": death, "photo_sources": photo_sources,
-    })
+    return json_response(
+        build_biography_response(
+            name=person_name or generation["name"],
+            biography=generation["biography"],
+            photos=photos,
+            birth=generation["birth"],
+            death=generation["death"],
+            photo_sources=photo_sources,
+            used_fallback=generation["used_fallback"],
+            warnings=generation["warnings"],
+        )
+    )
 
 
 @router.get("/cache")

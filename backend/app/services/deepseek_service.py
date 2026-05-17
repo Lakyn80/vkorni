@@ -1,7 +1,7 @@
 import os
 import re
-import requests
 import logging
+import httpx
 
 from app.services.prompt_service import pick_angle, build_system_prompt, build_user_message
 
@@ -30,7 +30,7 @@ def _clean(raw: str) -> str:
     return cleaned.strip()
 
 
-def _extract_error_message(response: requests.Response | None) -> str | None:
+def _extract_error_message(response: httpx.Response | None) -> str | None:
     if response is None:
         return None
 
@@ -57,6 +57,28 @@ def _extract_error_message(response: requests.Response | None) -> str | None:
             return value.strip()
 
     return None
+
+
+def _extract_generated_text(response: httpx.Response) -> str:
+    try:
+        payload = response.json()
+    except ValueError as exc:
+        raise DeepSeekServiceError(DEEPSEEK_UNAVAILABLE_MESSAGE) from exc
+
+    if not isinstance(payload, dict):
+        raise DeepSeekServiceError(DEEPSEEK_UNAVAILABLE_MESSAGE)
+
+    choices = payload.get("choices")
+    if not isinstance(choices, list) or not choices:
+        raise DeepSeekServiceError(DEEPSEEK_UNAVAILABLE_MESSAGE)
+
+    message = choices[0].get("message", {}) if isinstance(choices[0], dict) else {}
+    content = message.get("content", "") if isinstance(message, dict) else ""
+    cleaned = _clean(content)
+    if not cleaned:
+        raise DeepSeekServiceError(DEEPSEEK_UNAVAILABLE_MESSAGE)
+
+    return cleaned
 
 
 def generate_text(
@@ -92,7 +114,7 @@ def generate_text(
     payload = {
         "model": "deepseek-chat",
         "max_tokens": 2000,
-        "temperature": 0.9,
+        "temperature": 0.2,
         "messages": [
             {"role": "system", "content": system_prompt},
             {"role": "user",   "content": user_message},
@@ -105,17 +127,16 @@ def generate_text(
     }
 
     try:
-        response = requests.post(DEEPSEEK_URL, json=payload, headers=headers, timeout=90)
+        response = httpx.post(DEEPSEEK_URL, json=payload, headers=headers, timeout=90)
         response.raise_for_status()
-    except requests.HTTPError as exc:
+    except httpx.HTTPStatusError as exc:
         provider_message = _extract_error_message(exc.response) or str(exc)
         logger.exception("DeepSeek request failed: %s", provider_message)
         if exc.response is not None and exc.response.status_code == 402:
             raise DeepSeekBillingError(DEEPSEEK_BILLING_ERROR_MESSAGE) from exc
         raise DeepSeekServiceError(DEEPSEEK_UNAVAILABLE_MESSAGE) from exc
-    except requests.RequestException as exc:
+    except httpx.RequestError as exc:
         logger.exception("DeepSeek request failed")
         raise DeepSeekServiceError(DEEPSEEK_UNAVAILABLE_MESSAGE) from exc
 
-    raw = response.json().get("choices", [{}])[0].get("message", {}).get("content", "")
-    return _clean(raw), angle["id"]
+    return _extract_generated_text(response), angle["id"]
