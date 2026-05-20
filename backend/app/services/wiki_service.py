@@ -389,6 +389,35 @@ def _safe_get_pageimage(title: str) -> Optional[str]:
     return None
 
 
+def _safe_get_page_extract(title: str) -> Optional[str]:
+    params = {
+        "action": "query",
+        "prop": "extracts",
+        "titles": title,
+        "explaintext": 1,
+        "exsectionformat": "plain",
+        "redirects": 1,
+        "format": "json",
+    }
+
+    data = _request_wikimedia_json(
+        WIKI_API_URL,
+        headers=HEADERS,
+        params=params,
+        timeout=settings.wiki_request_timeout_seconds,
+        purpose=f"page extract lookup for {title}",
+    )
+    if not data:
+        return None
+
+    pages = data.get("query", {}).get("pages", {})
+    for page in pages.values():
+        extract = page.get("extract")
+        if isinstance(extract, str) and extract.strip():
+            return extract.strip()
+    return None
+
+
 def _download_wikimedia_image(url: str, file_path: str) -> str | None:
     for candidate_url in wikimedia_download_candidates(url):
         response = _request_wikimedia(
@@ -584,6 +613,7 @@ def fetch_person_from_wikipedia(name: str) -> Optional[Dict]:
     result = {
         "name": data.get("title"),
         "summary_text": data.get("extract"),
+        "source_text": None,
         "birth": None,
         "death": None,
         "wiki_url": None,
@@ -593,6 +623,7 @@ def fetch_person_from_wikipedia(name: str) -> Optional[Dict]:
     urls = data.get("content_urls", {})
     desktop = urls.get("desktop", {})
     result["wiki_url"] = desktop.get("page")
+    result["source_text"] = _safe_get_page_extract(result["name"]) or result["summary_text"]
 
     qid = _get_wikidata_id(result["name"])
     if qid:

@@ -1,8 +1,10 @@
 """Tests for services/biography_service.py."""
 
+import re
+
 from app.services.biography_service import (
-    LLM_FAILED_FALLBACK_USED,
     build_biography_response,
+    compose_biography_from_facts,
     generate_biography_text,
     normalize_biography_input,
 )
@@ -46,6 +48,44 @@ def test_generate_biography_with_full_valid_data_uses_llm():
     assert result["used_fallback"] is False
     assert result["biography"]
     assert result["warnings"] == []
+
+
+def test_generate_biography_with_full_source_text_skips_llm_and_keeps_source_coverage():
+    person = {
+        "name": "Тестовый Человек",
+        "birth": "1900",
+        "death": "1980",
+        "source_text": (
+            "Тестовый Человек родился в семье служащих и получил базовое образование в родном городе. "
+            "В ранние годы он проявил интерес к технике и общественной деятельности. "
+            "Позднее он работал в нескольких учреждениях и участвовал в профильных проектах. "
+            "В разные периоды его биографии упоминаются поездки, публикации и организационная работа. "
+            "Современники отмечали его последовательное участие в профессиональной среде. "
+            "Отдельные этапы жизни связаны с преподаванием, архивной работой и подготовкой материалов. "
+            "Сохранившиеся сведения описывают его деятельность в хронологическом и документальном порядке. "
+            "После смерти упоминания о нём продолжают встречаться в биографических и справочных публикациях."
+        ),
+    }
+
+    result = generate_biography_text(
+        source_person=person,
+        requested_name="Тестовый Человек",
+        style="style",
+        llm_generate=lambda context, style: (_ for _ in ()).throw(AssertionError("LLM should not be used")),
+    )
+
+    content = result["biography"]
+    for marker in ("Тестовый Человек", "1900 — 1980", "🕯️ Биография", "📚 Путь и дело", "🕊️ Память"):
+        content = content.replace(marker, "")
+
+    source_words = len(re.findall(r"[а-яёa-z0-9]+(?:-[а-яёa-z0-9]+)?", person["source_text"].lower()))
+    content_words = len(re.findall(r"[а-яёa-z0-9]+(?:-[а-яёa-z0-9]+)?", content.lower()))
+
+    assert result["used_fallback"] is False
+    assert "🕯️ Биография" in result["biography"]
+    assert "📚 Путь и дело" in result["biography"]
+    assert "🕊️ Память" in result["biography"]
+    assert content_words >= int(source_words * 0.75)
 
 
 def test_generate_biography_missing_full_name_adds_warning():
@@ -135,7 +175,7 @@ def test_generate_biography_empty_input_returns_fallback():
     )
     assert result["used_fallback"] is True
     assert result["biography"]
-    assert LLM_FAILED_FALLBACK_USED not in result["warnings"]
+    assert result["warnings"]
 
 
 def test_generate_biography_malformed_input_returns_fallback():
@@ -159,9 +199,10 @@ def test_generate_biography_llm_failure_returns_fallback():
         style=None,
         llm_generate=_llm_fail,
     )
-    assert result["used_fallback"] is True
+    assert result["used_fallback"] is False
     assert result["biography"]
-    assert LLM_FAILED_FALLBACK_USED in result["warnings"]
+    assert "🕯️ Биография" in result["biography"]
+    assert "📚 Путь и дело" in result["biography"]
 
 
 def test_generate_biography_empty_llm_output_returns_fallback():
@@ -171,9 +212,10 @@ def test_generate_biography_empty_llm_output_returns_fallback():
         style=None,
         llm_generate=lambda context, style: ("", "factual_memorial"),
     )
-    assert result["used_fallback"] is True
+    assert result["used_fallback"] is False
     assert result["biography"]
-    assert LLM_FAILED_FALLBACK_USED in result["warnings"]
+    assert "Лев Яшин" in result["biography"]
+    assert "🕊️ Память" in result["biography"]
 
 
 def test_generate_biography_invalid_llm_format_returns_fallback():
@@ -183,9 +225,39 @@ def test_generate_biography_invalid_llm_format_returns_fallback():
         style=None,
         llm_generate=lambda context, style: {"text": "bad"},
     )
-    assert result["used_fallback"] is True
+    assert result["used_fallback"] is False
     assert result["biography"]
-    assert LLM_FAILED_FALLBACK_USED in result["warnings"]
+    assert "Лев Яшин" in result["biography"]
+
+
+def test_compose_biography_from_facts_reorders_comma_name_naturally():
+    normalized = normalize_biography_input(
+        {
+            "name": "Менделеев, Дмитрий Иванович",
+            "birth": "27 января 1834",
+            "death": "20 января 1907",
+            "summary_text": "Дмитрий Иванович Менделеев — русский учёный-энциклопедист.",
+        }
+    )
+    biography = compose_biography_from_facts(normalized)
+    assert biography.startswith("Дмитрий Иванович Менделеев")
+    assert "🕯️ Биография" in biography
+    assert "🕊️ Память" in biography
+
+
+def test_compose_biography_from_facts_keeps_sparse_summary_substantial():
+    normalized = normalize_biography_input(
+        {
+            "name": "Юрий Гагарин",
+            "birth": "9 марта 1934",
+            "death": "27 марта 1968",
+            "summary_text": "Советский космонавт и военный лётчик, первый человек, совершивший космический полёт.",
+        }
+    )
+    biography = compose_biography_from_facts(normalized)
+    assert "📚 Путь и дело" in biography
+    assert biography.count(".") >= 4
+    assert "9 марта 1934 — 27 марта 1968" in biography
 
 
 def test_build_biography_response_keeps_contract_and_legacy_fields():

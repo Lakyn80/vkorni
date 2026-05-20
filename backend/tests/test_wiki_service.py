@@ -42,6 +42,16 @@ def fake_request_wikimedia_json(url, headers=None, params=None, timeout=None, pu
             "content_urls": {"desktop": {"page": "http://wiki"}},
             "originalimage": {"source": "http://example.com/Test.jpg"},
         }
+    if params and params.get("prop") == "extracts":
+        return {
+            "query": {
+                "pages": {
+                    "1": {
+                        "extract": "Full article text. Second sentence. Third sentence."
+                    }
+                }
+            }
+        }
     if "action=query&prop=pageprops" in url:
         return {
             "query": {
@@ -78,6 +88,7 @@ class WikiServiceTests(unittest.TestCase):
         person = fetch_person_from_wikipedia("Test Person")
         self.assertEqual(person["name"], "Test Person")
         self.assertEqual(person["summary_text"], "Summary text")
+        self.assertEqual(person["source_text"], "Full article text. Second sentence. Third sentence.")
         self.assertEqual(person["birth"], "1970")
         self.assertEqual(person["death"], "2020")
         self.assertEqual(person["images"], ["http://example.com/Test.jpg"])

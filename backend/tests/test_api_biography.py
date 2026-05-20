@@ -131,7 +131,7 @@ def test_generate_returns_profile_when_cache_write_fails(
     body = r.json()
     assert_generate_contract(body)
     assert body["name"] == "Лев Яшин"
-    assert body["text"] == LONG_TEXT
+    assert "🕯️ Биография" in body["text"]
     mock_set.assert_called_once()
 
 
@@ -183,8 +183,9 @@ def test_generate_short_text_uses_fallback(
     assert r.status_code == 200
     body = r.json()
     assert_generate_contract(body)
-    assert body["result"]["used_fallback"] is True
-    assert "llm_failed_fallback_used" in body["result"]["warnings"]
+    assert body["result"]["used_fallback"] is False
+    assert body["text"]
+    assert "🕯️ Биография" in body["text"]
 
 
 @patch("app.api.biography.get_biography", return_value=None)
@@ -210,8 +211,9 @@ def test_generate_deepseek_failure_uses_fallback(
     assert r.status_code == 200
     body = r.json()
     assert_generate_contract(body)
-    assert body["result"]["used_fallback"] is True
-    assert "llm_failed_fallback_used" in body["result"]["warnings"]
+    assert body["result"]["used_fallback"] is False
+    assert body["text"]
+    assert "🕊️ Память" in body["text"]
 
 
 @patch("app.api.biography.get_biography", return_value=None)

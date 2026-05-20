@@ -17,16 +17,14 @@ from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_excep
 
 from app.services.batch_service import update_job
 from app.services.wiki_service import fetch_person_from_wikipedia, fetch_person_images
-from app.services.deepseek_service import generate_text, DeepSeekBillingError, DeepSeekServiceError
+from app.services.deepseek_service import generate_text
+from app.services.biography_service import generate_biography_text
 from app.services.chroma_service import get_style_context
 from app.services.cache_service import set_biography
 from app.services.uniqueness_service import is_unique_enough
 from app.db.photos_repo import get_photos_by_person
 
 logger = logging.getLogger(__name__)
-
-MAX_GENERATION_ATTEMPTS = 3
-MIN_WORD_COUNT = 400
 
 
 # ─── Retried helpers ──────────────────────────────────────────────────────────
@@ -64,62 +62,31 @@ def process_biography(batch_id: str, name: str, style_name: str | None = None) -
     update_job(batch_id, name, status="running", started_at=time.time())
 
     try:
-        # ── 1. Fetch Wikipedia ──────────────────────────────────────────────
+        # ── 1. Fetch source data ────────────────────────────────────────────
         try:
             person = _fetch_wiki(name)
         except Exception as exc:
-            return _fail(batch_id, name, f"Wikipedia fetch failed: {exc}")
+            logger.warning("[batch:%s] Wikipedia fetch failed for '%s'; continuing with fallback-safe generation: %s", batch_id, name, exc)
+            person = None
 
-        if not person:
-            return _fail(batch_id, name, "Person not found on Wikipedia")
+        try:
+            style = get_style_context(style_name)
+        except Exception as exc:
+            logger.warning("[batch:%s] Style lookup failed for '%s'; continuing without style: %s", batch_id, name, exc)
+            style = None
 
-        # ── 2. Generate unique text ─────────────────────────────────────────
-        wiki_source = person.get("summary_text", "")
-        context = (
-            f"Имя: {person.get('name')}\n"
-            f"Годы жизни: {person.get('birth')}–{person.get('death')}\n"
-            f"Краткое описание: {wiki_source}\n"
+        generation = generate_biography_text(
+            source_person=person,
+            requested_name=name,
+            style=style,
+            llm_generate=generate_text,
+            uniqueness_check=is_unique_enough,
         )
-        style = get_style_context(style_name)
-
-        text = ""
-        tried_angles: list[str] = []
-
-        for attempt in range(MAX_GENERATION_ATTEMPTS):
-            try:
-                candidate, angle_used = generate_text(
-                    context, style, exclude_angle_ids=tried_angles
-                )
-                tried_angles.append(angle_used)
-            except DeepSeekBillingError as exc:
-                return _fail(batch_id, name, str(exc))
-            except DeepSeekServiceError as exc:
-                logger.warning("[batch:%s] DeepSeek unavailable on attempt %d: %s", batch_id, attempt + 1, exc)
-                time.sleep(5 * (attempt + 1))
-                continue
-            except Exception as exc:
-                logger.warning("[batch:%s] DeepSeek attempt %d failed: %s", batch_id, attempt + 1, exc)
-                time.sleep(5 * (attempt + 1))
-                continue
-
-            words = len(candidate.split()) if candidate else 0
-            if words < MIN_WORD_COUNT:
-                logger.warning("[batch:%s] Text too short (%d words), retrying", batch_id, words)
-                continue
-
-            if is_unique_enough(candidate, wiki_source):
-                text = candidate
-                logger.info("[batch:%s] Accepted text (angle=%s)", batch_id, angle_used)
-                break
-
-            logger.warning("[batch:%s] Text too similar to Wikipedia, retrying", batch_id)
-
-        if not text:
-            # Last resort: use last candidate even if similarity high
-            text = candidate if "candidate" in dir() and candidate else ""
-
-        if not text or len(text.split()) < MIN_WORD_COUNT:
-            return _fail(batch_id, name, "Failed to generate unique text after all attempts")
+        text = generation["biography"]
+        birth = generation["birth"]
+        death = generation["death"]
+        used_fallback = generation["used_fallback"]
+        warnings = generation["warnings"]
 
         # ── 3. Fetch images ─────────────────────────────────────────────────
         try:
@@ -128,7 +95,12 @@ def process_biography(batch_id: str, name: str, style_name: str | None = None) -
             logger.warning("[batch:%s] Image fetch failed (continuing without): %s", batch_id, exc)
             downloaded = []
 
-        photo_rows = get_photos_by_person(name)
+        try:
+            photo_rows = get_photos_by_person(name)
+        except Exception as exc:
+            logger.warning("[batch:%s] Photo lookup failed (continuing without): %s", batch_id, exc)
+            photo_rows = []
+
         if downloaded:
             photos = [p["file_path"] for p in downloaded if p.get("file_path")]
             photo_sources = {p["file_path"]: p["source_url"] for p in downloaded if p.get("source_url")}
@@ -136,25 +108,41 @@ def process_biography(batch_id: str, name: str, style_name: str | None = None) -
             photos = [p["file_path"] for p in photo_rows]
             photo_sources = {p["file_path"]: p["source_url"] for p in photo_rows if p.get("source_url")}
         else:
-            photos = person.get("images", [])
+            photos = person.get("images", []) if person else []
             photo_sources = {}
 
         # ── 4. Cache result ─────────────────────────────────────────────────
-        birth = person.get("birth")
-        death = person.get("death")
-        set_biography(name, text, photos, birth=birth, death=death, photo_sources=photo_sources)
+        try:
+            set_biography(name, text, photos, birth=birth, death=death, photo_sources=photo_sources)
+        except Exception as exc:
+            logger.warning("[batch:%s] Cache write failed for '%s'; returning uncached result: %s", batch_id, name, exc)
 
         result = {
             "status": "done",
             "name": name,
+            "text": text,
             "birth": birth,
             "death": death,
             "photos": photos,
             "photo_sources": photo_sources,
+            "used_fallback": used_fallback,
+            "warnings": warnings,
             "finished_at": time.time(),
         }
-        update_job(batch_id, name, status="done", birth=birth, death=death,
-                   photos=photos, photo_sources=photo_sources, finished_at=result["finished_at"])
+        update_job(
+            batch_id,
+            name,
+            status="done",
+            text=text,
+            birth=birth,
+            death=death,
+            photos=photos,
+            photo_sources=photo_sources,
+            used_fallback=used_fallback,
+            warnings=warnings,
+            finished_at=result["finished_at"],
+            error=None,
+        )
         logger.info("[batch:%s] Done '%s'", batch_id, name)
         return result
 

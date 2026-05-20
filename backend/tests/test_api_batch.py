@@ -1,6 +1,15 @@
 """Tests for api/batch.py endpoints."""
+import sys
+import types
 from unittest.mock import patch, MagicMock
 from fastapi.testclient import TestClient
+
+fake_chroma_client = types.ModuleType("app.db.chroma_client")
+fake_chroma_client.get_style = lambda name: None
+fake_chroma_client.search_styles = lambda query, top_k=3: []
+fake_chroma_client.upsert_style = lambda name, text: None
+fake_chroma_client.add_document = lambda name, text: None
+sys.modules.setdefault("app.db.chroma_client", fake_chroma_client)
 
 from app.main import app
 
