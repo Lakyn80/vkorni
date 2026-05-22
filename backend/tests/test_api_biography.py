@@ -27,8 +27,12 @@ FAKE_PERSON = {
 }
 
 LONG_TEXT = (
-    "Лев Яшин остается одной из ключевых фигур в истории советского футбола. "
-    "Его биография связана с выступлениями в воротах, международными турнирами и устойчивой памятью о спортивном наследии."
+    "Лев Яшин\n"
+    "22 октября 1929 — 20 марта 1990\n\n"
+    "🕯️ Биография\n\n"
+    "Лев Яшин — советский футбольный вратарь, олимпийский чемпион и чемпион Европы.\n\n"
+    "📚 Путь и дело\n\n"
+    "Советский футбольный вратарь, олимпийский чемпион и чемпион Европы."
 )
 
 
@@ -183,7 +187,7 @@ def test_generate_short_text_uses_fallback(
     assert r.status_code == 200
     body = r.json()
     assert_generate_contract(body)
-    assert body["result"]["used_fallback"] is False
+    assert body["result"]["used_fallback"] is True
     assert body["text"]
     assert "🕯️ Биография" in body["text"]
 
@@ -211,7 +215,7 @@ def test_generate_deepseek_failure_uses_fallback(
     assert r.status_code == 200
     body = r.json()
     assert_generate_contract(body)
-    assert body["result"]["used_fallback"] is False
+    assert body["result"]["used_fallback"] is True
     assert body["text"]
     assert "🕊️ Память" in body["text"]
 
@@ -227,6 +231,37 @@ def test_generate_missing_name_returns_success(mock_style, mock_wiki, mock_cache
     assert body["name"] == ""
     assert body["result"]["used_fallback"] is True
     assert "missing_full_name" in body["result"]["warnings"]
+
+
+@patch("app.api.biography.get_biography", return_value=None)
+@patch(
+    "app.api.biography.fetch_person_from_wikipedia",
+    return_value={
+        "name": "Лукьянов, Владимир Сергеевич",
+        "summary_text": "Страница значений.",
+        "is_ambiguous": True,
+        "images": [],
+    },
+)
+@patch("app.api.biography.get_style_context", return_value="style")
+@patch("app.api.biography.fetch_person_images", return_value=[])
+@patch("app.api.biography.get_photos_by_person", return_value=[])
+@patch("app.api.biography.set_biography")
+def test_generate_ambiguous_person_returns_safe_text(
+    mock_set,
+    mock_photos_repo,
+    mock_images,
+    mock_style,
+    mock_wiki,
+    mock_cache,
+):
+    r = client.post("/api/generate?name=Владимир Сергеевич Лукьянов")
+    assert r.status_code == 200
+    body = r.json()
+    assert_generate_contract(body)
+    assert body["result"]["used_fallback"] is True
+    assert "ambiguous_source" in body["result"]["warnings"]
+    assert "недостаточны для однозначного определения личности" in body["text"]
 
 
 # ── /cache ─────────────────────────────────────────────────────────────────────

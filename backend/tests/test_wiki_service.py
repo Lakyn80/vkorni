@@ -1,6 +1,7 @@
 import os
 import tempfile
 import unittest
+from urllib.parse import unquote
 from unittest.mock import patch
 
 from app.services import wiki_service
@@ -92,6 +93,66 @@ class WikiServiceTests(unittest.TestCase):
         self.assertEqual(person["birth"], "1970")
         self.assertEqual(person["death"], "2020")
         self.assertEqual(person["images"], ["http://example.com/Test.jpg"])
+
+    @patch("app.services.wiki_service._request_wikimedia_json")
+    def test_fetch_person_from_wikipedia_resolves_ambiguous_candidate_from_query_hint(self, request_json_mock):
+        def side_effect(url, headers=None, params=None, timeout=None, purpose=None):
+            decoded_url = unquote(url)
+            if "page/summary" in decoded_url and "Лукьянов,_Владимир_Сергеевич_(архитектор)" in decoded_url:
+                return {
+                    "title": "Лукьянов, Владимир Сергеевич (архитектор)",
+                    "extract": "Советский и российский архитектор, художник.",
+                    "content_urls": {"desktop": {"page": "http://wiki/architect"}},
+                    "originalimage": {"source": "http://example.com/architect.jpg"},
+                }
+            if "page/summary" in url:
+                return {
+                    "title": "Лукьянов, Владимир Сергеевич",
+                    "type": "disambiguation",
+                    "extract": (
+                        "Лукьянов, Владимир Сергеевич:\n"
+                        "Лукьянов, Владимир Сергеевич (1902—1980) — советский учёный.\n"
+                        "Лукьянов, Владимир Сергеевич (архитектор) — советский и российский архитектор, художник."
+                    ),
+                    "content_urls": {"desktop": {"page": "http://wiki/disambig"}},
+                }
+            if params and params.get("prop") == "extracts":
+                return {"query": {"pages": {"1": {"extract": "Полный текст статьи об архитекторе."}}}}
+            if "action=query&prop=pageprops" in url:
+                return {"query": {"pages": {"1": {"pageprops": {"wikibase_item": "Q2"}}}}}
+            if "wikidata" in url:
+                return {"entities": {"Q2": {"claims": {"P569": [{"mainsnak": {"datavalue": {"value": {"time": "+1945-08-18T00:00:00Z", "precision": 11}}}}]}}}}
+            return {}
+
+        request_json_mock.side_effect = side_effect
+        person = fetch_person_from_wikipedia("Владимир Сергеевич Лукьянов (архитектор)")
+        self.assertFalse(person["is_ambiguous"])
+        self.assertEqual(person["name"], "Лукьянов, Владимир Сергеевич (архитектор)")
+        self.assertEqual(person["birth"], "18 августа 1945")
+        self.assertEqual(person["images"], ["http://example.com/architect.jpg"])
+
+    @patch("app.services.wiki_service._request_wikimedia_json")
+    def test_fetch_person_from_wikipedia_keeps_candidates_for_ambiguous_name(self, request_json_mock):
+        def side_effect(url, headers=None, params=None, timeout=None, purpose=None):
+            if "page/summary" in url:
+                return {
+                    "title": "Лукьянов, Владимир Сергеевич",
+                    "type": "disambiguation",
+                    "extract": (
+                        "Лукьянов, Владимир Сергеевич:\n"
+                        "Лукьянов, Владимир Сергеевич (1902—1980) — советский учёный.\n"
+                        "Лукьянов, Владимир Сергеевич (архитектор) — советский и российский архитектор, художник.\n"
+                        "Лукьянов, Владимир Сергеевич (1952—2009) — советский лыжник, тренер."
+                    ),
+                    "content_urls": {"desktop": {"page": "http://wiki/disambig"}},
+                }
+            return {}
+
+        request_json_mock.side_effect = side_effect
+        person = fetch_person_from_wikipedia("Владимир Сергеевич Лукьянов")
+        self.assertTrue(person["is_ambiguous"])
+        self.assertEqual(len(person["ambiguity_candidates"]), 3)
+        self.assertEqual(person["ambiguity_candidates"][1]["title"], "Лукьянов, Владимир Сергеевич (архитектор)")
 
     @patch("app.services.wiki_service.time.sleep")
     @patch("app.services.wiki_service.time.time", side_effect=[100.2, 100.2, 101.05])
@@ -192,7 +253,7 @@ class WikiServiceTests(unittest.TestCase):
             with patch.object(wiki_service, "STATIC_PHOTOS_DIR", tmp), \
                  patch.object(wiki_service, "MAX_IMAGES", 1), \
                  patch("app.services.wiki_service._safe_search_wiki_title", return_value="Test Person"), \
-                 patch("app.services.wiki_service._request_wikimedia_json", return_value={"originalimage": {"source": "https://upload.wikimedia.org/Test.jpg"}}), \
+                 patch("app.services.wiki_service._request_wikimedia_json", return_value={"title": "Test Person", "originalimage": {"source": "https://upload.wikimedia.org/Test.jpg"}}), \
                  patch("app.services.wiki_service.find_photo_by_source_url", return_value={"file_path": cached_rel_path}), \
                  patch("app.services.wiki_service._relative_static_to_abs_path", return_value=cached_file), \
                  patch("app.services.wiki_service._download_wikimedia_image") as download_mock, \
@@ -212,7 +273,7 @@ class WikiServiceTests(unittest.TestCase):
             with patch.object(wiki_service, "STATIC_PHOTOS_DIR", tmp), \
                  patch.object(wiki_service, "MAX_IMAGES", 1), \
                  patch("app.services.wiki_service._safe_search_wiki_title", return_value="Test Person"), \
-                 patch("app.services.wiki_service._request_wikimedia_json", return_value={"originalimage": {"source": "https://upload.wikimedia.org/Test.jpg"}}), \
+                 patch("app.services.wiki_service._request_wikimedia_json", return_value={"title": "Test Person", "originalimage": {"source": "https://upload.wikimedia.org/Test.jpg"}}), \
                  patch("app.services.wiki_service.center_face_in_image") as center_mock, \
                  patch("app.services.wiki_service.convert_to_webp") as convert_mock, \
                  patch("app.services.wiki_service.add_photo") as add_photo_mock:

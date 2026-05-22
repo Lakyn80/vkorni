@@ -6,21 +6,22 @@ def test_pick_angle_returns_known_angle():
     assert angle in ANGLES
 
 
-def test_build_system_prompt_is_creative_but_strictly_source_bound():
+def test_build_system_prompt_matches_strict_source_only_contract():
     prompt = build_system_prompt(ANGLES[0], style="ритм без фактов")
 
-    assert "ТВОРЧЕСКАЯ РАМКА" in prompt
-    assert "ОБЯЗАТЕЛЬНАЯ СТРУКТУРА" in prompt
-    assert "Запрещено что-либо выдумывать" in prompt
-    assert "Запрещено придумывать чувства, мысли, мотивы" in prompt
-    assert "Запрещены гипотетические конструкции" in prompt
-    assert "Если выбранный угол зрения требует фактов, которых нет" in prompt
-    assert "эмодзи-заголовки" in prompt
+    assert "Jsi produkční biografický editor." in prompt
+    assert "Smíš použít POUZE informace" in prompt
+    assert "Nesmíš použít žádné vlastní znalosti" in prompt
+    assert "Nevymýšlej žádné profese" in prompt
+    assert "Bezpečnost proti halucinacím" in prompt
+    assert "Vrať pouze finální biografický text." in prompt
 
 
-def test_build_user_message_requires_skipping_unsupported_sections():
-    message = build_user_message("Факт 1", ANGLES[0])
+def test_build_user_message_includes_person_name_and_source_text():
+    context = "Полное имя: Юрий Гагарин\nДата рождения: 9 марта 1934\nПолный подтвержденный текст источника:\nФакт 1"
+    message = build_user_message(context, ANGLES[0])
 
-    assert "не дополняй факты" in message
-    assert "пропусти этот раздел" in message
-    assert "Подтвержденные данные" in message
+    assert "POŽADOVANÁ OSOBA:" in message
+    assert "Юрий Гагарин" in message
+    assert "ZDROJOVÝ TEXT:" in message
+    assert "Факт 1" in message

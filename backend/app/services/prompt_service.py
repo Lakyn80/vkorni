@@ -1,148 +1,115 @@
 """
 prompt_service.py
 -----------------
-Creative but source-bound prompt building for memorial biographies.
+Strict source-bound prompt building for biography generation.
 """
 
-import random
+from __future__ import annotations
 
-# Creative narrative angles constrained to confirmed source facts only.
+import random
+import re
+
 ANGLES: list[dict] = [
-    {
-        "id": "key_moment",
-        "directive": (
-            "Если во входных данных есть явный переломный момент, начни с него. "
-            "Используй только прямо подтвержденное событие без домысливания деталей."
-        ),
-        "tone": "сдержанный, выразительный",
-    },
-    {
-        "id": "era_mirror",
-        "directive": (
-            "Покажи человека в контексте эпохи, но только если исторический контекст "
-            "прямо присутствует во входных данных."
-        ),
-        "tone": "исторический, документальный",
-    },
-    {
-        "id": "legacy_first",
-        "directive": (
-            "Начни с подтвержденного наследия, памяти или значения для истории, если "
-            "это явно есть в источнике, а затем перейди к биографии."
-        ),
-        "tone": "мемориальный, ретроспективный",
-    },
-    {
-        "id": "childhood_lens",
-        "directive": (
-            "Если в источнике есть факты о детстве или происхождении, проведи через "
-            "них раннюю часть биографии, не добавляя ничего сверх данных."
-        ),
-        "tone": "теплый, документальный",
-    },
-    {
-        "id": "chronology_focus",
-        "directive": (
-            "Собери биографию как ясную последовательность подтвержденных этапов жизни "
-            "без пропусков и без свободных интерпретаций."
-        ),
-        "tone": "ровный, биографический",
-    },
-    {
-        "id": "service_and_work",
-        "directive": (
-            "Сделай акцент на подтвержденном труде, служении, профессии или главном "
-            "деле жизни, если это есть во входных данных."
-        ),
-        "tone": "уважительный, предметный",
-    },
-    {
-        "id": "last_day",
-        "directive": (
-            "Если источник содержит подтвержденные сведения о последнем периоде жизни "
-            "или последнем значимом событии, можно начать с него и затем вернуться к хронологии."
-        ),
-        "tone": "собранный, мемориальный",
-    },
-    {
-        "id": "one_sentence",
-        "directive": (
-            "Собери жизненный путь в одной точной мысли, опирающейся только на "
-            "подтвержденные факты, а затем раскрой ее через биографические детали."
-        ),
-        "tone": "концентрированный, литературный",
-    },
+    {"id": "source_bound_profile", "directive": "Drž se výhradně zdroje.", "tone": "důstojný, čtivý"},
+    {"id": "source_bound_chronology", "directive": "Zachovej chronologii a význam faktů.", "tone": "klidný, přesný"},
+    {"id": "source_bound_medallion", "directive": "Vytvoř krátký literární medailon bez halucinací.", "tone": "střízlivý, literární"},
 ]
 
 
 def pick_angle(exclude_ids: list[str] | None = None) -> dict:
-    """Pick a creative but safe angle, optionally excluding already-used ones."""
     pool = [a for a in ANGLES if not exclude_ids or a["id"] not in exclude_ids]
     if not pool:
         pool = ANGLES
     return random.choice(pool)
 
 
+def _extract_person_name(context: str) -> str:
+    if not isinstance(context, str):
+        return ""
+
+    match = re.search(r"^Полное имя:\s*(.+)$", context, flags=re.MULTILINE)
+    if match:
+        return match.group(1).strip()
+
+    match = re.search(r"^Name:\s*(.+)$", context, flags=re.MULTILINE)
+    if match:
+        return match.group(1).strip()
+
+    return ""
+
+
 def build_system_prompt(angle: dict, style: str | None = None) -> str:
     prompt = (
-        "Ты — русскоязычный биографический редактор Vkorni.com. Тебе нужен живой, "
-        "красиво написанный, но строго документальный текст.\n\n"
-        "═══ АБСОЛЮТНЫЕ ПРАВИЛА ═══\n"
-        "1. Используй только факты, прямо присутствующие во входных данных.\n"
-        "2. Запрещено что-либо выдумывать, достраивать по вероятности или дополнять "
-        "знаниями из памяти.\n"
-        "3. Запрещено придумывать чувства, мысли, мотивы, характер, скрытые "
-        "противоречия, слабости, разговоры, атмосферу, звук, запах, цвет сцены, "
-        "внутренние переживания, воображаемых свидетелей и любые художественные детали, "
-        "которых нет во входных данных.\n"
-        "4. Запрещено придумывать семью, место рождения, географию, награды, карьерные "
-        "этапы, должности, причины смерти, болезни, отношения, конфликты и любые иные "
-        "биографические сведения, которых нет во входных данных.\n"
-        "5. Запрещены гипотетические конструкции и альтернативные сценарии: "
-        "«мог бы», «как будто», «словно», «вероятно», «по-видимому», «возможно», "
-        "если они не являются частью подтвержденной цитаты из входных данных.\n"
-        "6. Если выбранный угол зрения требует фактов, которых нет во входных данных, "
-        "молча упрости подачу и вернись к нейтральной документальной форме.\n"
-        "7. Не копируй текст источника дословно длинными кусками, но и не меняй смысл фактов.\n"
-        "8. Не используй Markdown-решетки, списки и служебные пояснения. Plain text only.\n"
-        "9. Текст должен быть только на русском языке.\n"
-        "10. Не упоминай, что ты модель, ИИ или нейросеть.\n\n"
-        "═══ ТВОРЧЕСКАЯ РАМКА ═══\n"
-        f"Тон: {angle['tone']}\n"
-        f"Угол зрения: {angle['directive']}\n\n"
-        "═══ ОБЯЗАТЕЛЬНАЯ СТРУКТУРА ═══\n"
-        "Линия 1: полное имя человека.\n"
-        "Линия 2: даты жизни, если они известны.\n"
-        "Пустая строка.\n"
-        "Затем 3-6 коротких разделов plain text с выразительными, но сдержанными "
-        "заголовками. Допустимы эмодзи-заголовки вроде «🕯️ Биография», «🌿 Истоки», "
-        "«📚 Путь и дело», «🏛️ Служение», «🕊️ Память».\n"
-        "Раздел добавляй только если для него есть подтвержденные факты.\n"
-        "Если данных мало, текст может быть короче, но все равно должен выглядеть "
-        "цельным и уважительным.\n"
-        "Если данных много, раскрой биографию пропорционально объему источника.\n\n"
-        "═══ ЦЕЛЬ ═══\n"
-        "Напиши оригинально по форме, но абсолютно точно по содержанию.\n"
+        "Jsi produkční biografický editor.\n\n"
+        "Tvůj úkol:\n"
+        "Z poskytnutého zdrojového textu vytvoř souvislý, čtivý, literárně laděný životopisný výtah "
+        "v rozsahu přibližně 300–700 slov.\n"
+        "Nikdy nepřekroč 700 slov.\n\n"
+        "NEJDŮLEŽITĚJŠÍ PRAVIDLO:\n"
+        "Smíš použít POUZE informace, které jsou výslovně obsažené ve zdrojovém textu.\n"
+        "Nesmíš použít žádné vlastní znalosti, domněnky, odhady, doplnění ani informace z paměti modelu.\n\n"
+        "Zákazy:\n"
+        "- Nevymýšlej žádné profese, tituly, příbuzné, školy, díla, ocenění, funkce ani životní události.\n"
+        "- Neměň význam zdrojových informací.\n"
+        "- Nespojuj tuto osobu s jinou osobou stejného nebo podobného jména.\n"
+        "- Nepřidávej žádná data, místa ani souvislosti, pokud nejsou ve zdroji.\n"
+        "- Nepiš, že osoba něco „pravděpodobně“, „zřejmě“ nebo „nejspíš“ udělala.\n"
+        "- Nepoužívej obecné fráze, které vytvářejí falešný dojem významu, pokud to nevyplývá ze zdroje.\n"
+        "- Nepřidávej bibliografii, odkazy, reference, poznámky pod čarou ani technické části Wikipedie.\n\n"
+        "Co máš udělat:\n"
+        "- Přečti celý zdrojový text.\n"
+        "- Zachovej všechny důležité životní události, fakta, díla, funkce, roky, místa a souvislosti.\n"
+        "- Každou informaci přepiš vlastními slovy.\n"
+        "- Text může být stylisticky originální, plynulý a lehce lyrický.\n"
+        "- Obsah ale musí zůstat přesně stejný jako ve zdroji.\n"
+        "- Pokud zdroj říká, že osoba byla architekt a postavila konkrétní domy, napiš totéž vlastními slovy.\n"
+        "- Pokud zdroj nějakou informaci neobsahuje, nesmí se ve výsledku objevit.\n\n"
+        "Styl:\n"
+        "- Piš přirozeně, důstojně a čtivě.\n"
+        "- Nepiš suchý seznam faktů.\n"
+        "- Nepřeháněj poetiku.\n"
+        "- Nepoužívej patos, který není podložený obsahem.\n"
+        "- Výsledek má znít jako kvalitní krátký biografický medailon.\n\n"
+        "Bezpečnost proti halucinacím:\n"
+        "Před odevzdáním si interně zkontroluj každou větu:\n"
+        "1. Je tato informace přímo obsažená ve zdroji?\n"
+        "2. Neobsahuje věta nové tvrzení, které ve zdroji není?\n"
+        "3. Nemůže být tato věta omylem vztažená k jiné osobě?\n"
+        "4. Nezměnil jsem význam původní informace?\n\n"
+        "Pokud některá věta neprojde kontrolou, odstraň ji nebo ji přepiš tak, aby přesně odpovídala zdroji.\n\n"
+        "Pokud je zdroj příliš krátký:\n"
+        "- Stále vrať použitelný životopisný text.\n"
+        "- Nerozšiřuj ho vymyšlenými informacemi.\n"
+        "- Raději napiš kratší bezpečný text než delší nepravdivý text.\n\n"
+        "Pokud je osoba ve zdroji nejednoznačná:\n"
+        "- Nemíchej více osob dohromady.\n"
+        "- Použij pouze informace, které se jednoznačně vztahují k požadované osobě.\n"
+        "- Pokud nelze osobu jednoznačně určit, napiš bezpečný obecný výtah pouze z jistých informací.\n\n"
+        "Výstup:\n"
+        "- Vrať pouze finální biografický text.\n"
+        "- Nepiš žádné vysvětlení.\n"
+        "- Nepiš žádné poznámky o tom, že pracuješ se zdrojem.\n"
+        "- Nepiš seznam použitých pravidel.\n"
+        "- Nepiš markdown nadpisy."
     )
 
     if style:
         prompt += (
-            "\n═══ СТИЛЕВОЙ ОРИЕНТИР ═══\n"
-            "Можно учитывать только ритм и интонацию. Никакие факты, образы или "
-            "сюжетные ходы переносить нельзя:\n"
-            + style[:2000]
-            + "\n"
+            "\n\nDoplňkové omezení:\n"
+            "- Případný stylový vzor ber jen jako rytmickou inspiraci.\n"
+            "- Nesmíš z něj převzít žádná fakta ani nové významové vrstvy."
         )
 
     return prompt
 
 
 def build_user_message(context: str, angle: dict) -> str:
+    person_name = _extract_person_name(context) or "{{PERSON_NAME}}"
+    source_text = context.strip() if isinstance(context, str) else ""
+
     return (
-        f"Угол зрения для этого текста: «{angle['directive']}»\n\n"
-        "Подготовь биографию строго по данным ниже. Перефразируй аккуратно, но не "
-        "искажай и не дополняй факты. Если подтвержденных сведений недостаточно для "
-        "какого-либо раздела, пропусти этот раздел.\n\n"
-        "Подтвержденные данные:\n"
-        f"{context}"
+        "POŽADOVANÁ OSOBA:\n"
+        f"{person_name}\n\n"
+        "ZDROJOVÝ TEXT:\n"
+        f"{source_text}"
     )

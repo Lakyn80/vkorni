@@ -14,6 +14,13 @@ function isLoopbackUrl(value: string): boolean {
   }
 }
 
+function getLoopbackBackendBase(): string {
+  if (typeof window === "undefined") return "";
+  if (!isLoopbackHost(window.location.hostname)) return "";
+
+  return `http://${window.location.hostname}:8020`;
+}
+
 export function getConfiguredApiBase(): string {
   const envValue = process.env.NEXT_PUBLIC_API_BASE?.trim();
   if (!envValue) return "";
@@ -25,11 +32,24 @@ export function getConfiguredApiBase(): string {
   return isLoopbackHost(window.location.hostname) ? normalized : "";
 }
 
-export function toAppUrl(path: string): string {
-  if (!path) return path;
-  if (/^https?:\/\//i.test(path)) return path;
+export function getAppUrlCandidates(path: string): string[] {
+  if (!path) return [path];
+  if (/^https?:\/\//i.test(path)) return [path];
 
   const normalizedPath = path.startsWith("/") ? path : `/${path}`;
-  const base = getConfiguredApiBase();
-  return base ? `${base}${normalizedPath}` : normalizedPath;
+  const configuredBase = getConfiguredApiBase();
+  const loopbackBase = getLoopbackBackendBase();
+  const candidates = [
+    configuredBase || loopbackBase,
+    normalizedPath,
+    loopbackBase,
+  ]
+    .filter(Boolean)
+    .map((base) => (base.startsWith("/") ? base : `${base}${normalizedPath}`));
+
+  return [...new Set(candidates)];
+}
+
+export function toAppUrl(path: string): string {
+  return getAppUrlCandidates(path)[0] ?? path;
 }

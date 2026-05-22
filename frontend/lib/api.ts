@@ -1,5 +1,5 @@
 import type { Profile } from "@/types";
-import { toAppUrl } from "@/lib/api-base";
+import { getAppUrlCandidates } from "@/lib/api-base";
 
 function isAbsoluteUrl(value: string | null | undefined): value is string {
   return !!value && /^https?:\/\//i.test(value);
@@ -22,52 +22,82 @@ function getErrorMessage(text: string, status: number): string {
   return text;
 }
 
-async function request<T>(url: string, options?: RequestInit): Promise<T> {
-  const res = await fetch(url, options);
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(getErrorMessage(text, res.status));
+function isRetryableStatus(status: number): boolean {
+  return status >= 500;
+}
+
+function isRetryableNetworkError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  return error.name === "TypeError" || /network|fetch|socket|failed/i.test(error.message);
+}
+
+export async function requestJson<T>(path: string, options?: RequestInit): Promise<T> {
+  const urls = getAppUrlCandidates(path);
+  let lastError: Error | null = null;
+
+  for (let index = 0; index < urls.length; index += 1) {
+    const url = urls[index];
+    try {
+      const res = await fetch(url, options);
+      if (!res.ok) {
+        const text = await res.text();
+        const error = new Error(getErrorMessage(text, res.status));
+        if (index < urls.length - 1 && isRetryableStatus(res.status)) {
+          lastError = error;
+          continue;
+        }
+        throw error;
+      }
+      return res.json();
+    } catch (error) {
+      if (index < urls.length - 1 && isRetryableNetworkError(error)) {
+        lastError = error instanceof Error ? error : new Error(String(error));
+        continue;
+      }
+      throw error;
+    }
   }
-  return res.json();
+
+  throw lastError ?? new Error("Request failed");
 }
 
 export const api = {
   generate(name: string, force: boolean) {
     const params = new URLSearchParams({ name });
     if (force) params.set("FORCE_REGENERATE", "true");
-    return request<{ name: string; text: string; photos: string[]; birth?: string | null; death?: string | null; photo_sources?: Record<string, string> }>(
-      toAppUrl(`/api/generate?${params}`),
+    return requestJson<{ name: string; text: string; photos: string[]; birth?: string | null; death?: string | null; photo_sources?: Record<string, string> }>(
+      `/api/generate?${params}`,
       { method: "POST" }
     );
   },
 
   getCacheList() {
-    return request<{ names: string[] }>(toAppUrl("/api/cache"));
+    return requestJson<{ names: string[] }>("/api/cache");
   },
 
   getCachedProfile(name: string) {
-    return request<{ name: string; text: string; photos: string[]; birth?: string | null; death?: string | null; photo_sources?: Record<string, string> }>(
-      toAppUrl(`/api/cache/${encodeURIComponent(name)}`)
+    return requestJson<{ name: string; text: string; photos: string[]; birth?: string | null; death?: string | null; photo_sources?: Record<string, string> }>(
+      `/api/cache/${encodeURIComponent(name)}`
     );
   },
 
   deleteCache(name: string) {
-    return request<unknown>(
-      toAppUrl(`/api/cache/${encodeURIComponent(name)}`),
+    return requestJson<unknown>(
+      `/api/cache/${encodeURIComponent(name)}`,
       { method: "DELETE" }
     );
   },
 
   deleteAllCache() {
-    return request<{ deleted: number }>(
-      toAppUrl("/api/cache"),
+    return requestJson<{ deleted: number }>(
+      "/api/cache",
       { method: "DELETE" }
     );
   },
 
   frame(photoUrl: string, birth: string | null, death: string | null, frameId?: number | null) {
-    return request<{ url: string; frame_id: number }>(
-      toAppUrl("/api/frame"),
+    return requestJson<{ url: string; frame_id: number }>(
+      "/api/frame",
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -85,8 +115,8 @@ export const api = {
         ? profile.framedPhotoUrl
         : null;
     const photoSourceUrl = mappedPhotoSource ?? directPhotoSource;
-    return request<{ status: string; error?: string; url?: string }>(
-      toAppUrl("/api/export"),
+    return requestJson<{ status: string; error?: string; url?: string }>(
+      "/api/export",
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -108,8 +138,8 @@ export const api = {
   },
 
   createBatch(names: string[], styleName?: string) {
-    return request<{ batch_id: string; total: number; status: string }>(
-      toAppUrl("/api/batch"),
+    return requestJson<{ batch_id: string; total: number; status: string }>(
+      "/api/batch",
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -119,12 +149,12 @@ export const api = {
   },
 
   getBatch(batchId: string) {
-    return request<import("@/types").BatchStatus>(toAppUrl(`/api/batch/${batchId}`));
+    return requestJson<import("@/types").BatchStatus>(`/api/batch/${batchId}`);
   },
 
   retryBatch(batchId: string) {
-    return request<{ batch_id: string; retried: number }>(
-      toAppUrl(`/api/batch/${batchId}/retry`),
+    return requestJson<{ batch_id: string; retried: number }>(
+      `/api/batch/${batchId}/retry`,
       { method: "POST" }
     );
   },
@@ -132,8 +162,8 @@ export const api = {
   uploadPhoto(name: string, file: File) {
     const form = new FormData();
     form.append("file", file);
-    return request<{ url: string }>(
-      toAppUrl(`/api/upload?name=${encodeURIComponent(name)}`),
+    return requestJson<{ url: string }>(
+      `/api/upload?name=${encodeURIComponent(name)}`,
       { method: "POST", body: form }
     );
   },
@@ -141,8 +171,8 @@ export const api = {
   // ── Admin ─────────────────────────────────────────────────────────────────
 
   bulkExport(names: string[]) {
-    return request<{ export_id: string; total: number }>(
-      toAppUrl("/api/bulk-export"),
+    return requestJson<{ export_id: string; total: number }>(
+      "/api/bulk-export",
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -152,12 +182,12 @@ export const api = {
   },
 
   getBulkExport(exportId: string) {
-    return request<import("@/types").BulkExportStatus>(toAppUrl(`/api/bulk-export/${exportId}`));
+    return requestJson<import("@/types").BulkExportStatus>(`/api/bulk-export/${exportId}`);
   },
 
   adminLogin(username: string, password: string) {
-    return request<{ access_token: string; token_type: string }>(
-      toAppUrl("/api/admin/login"),
+    return requestJson<{ access_token: string; token_type: string }>(
+      "/api/admin/login",
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -167,8 +197,8 @@ export const api = {
   },
 
   adminChangePassword(token: string, currentPassword: string, newPassword: string) {
-    return request<{ status: string }>(
-      toAppUrl("/api/admin/change-password"),
+    return requestJson<{ status: string }>(
+      "/api/admin/change-password",
       {
         method: "POST",
         headers: {

@@ -89,7 +89,7 @@ export function ProfileCard({ profile, onRegenerate, onExport, onUpload, onSelec
           {profile.error}
         </div>
       ) : profile.text ? (
-        <div className="rounded-2xl border border-ink/8 bg-white/60 p-5 text-sm leading-relaxed text-ink/75 max-h-48 overflow-y-auto">
+        <div className="whitespace-pre-wrap rounded-2xl border border-ink/8 bg-white/60 p-5 text-sm leading-relaxed text-ink/75 max-h-48 overflow-y-auto">
           {profile.text}
         </div>
       ) : null}

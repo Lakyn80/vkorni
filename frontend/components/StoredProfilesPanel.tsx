@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { toAppUrl } from "@/lib/api-base";
+import { requestJson } from "@/lib/api";
 import { normalizePhotoUrl } from "@/utils/photos";
 
 type StoredProfileListItem = {
@@ -50,10 +50,6 @@ type StoredProfileDetail = StoredProfileListItem & {
   export_attempts: StoredProfileAttempt[];
 };
 
-type ApiError = {
-  detail?: string;
-};
-
 function formatDateTime(value?: number | null): string {
   if (!value) return "Дата неизвестна";
   return new Intl.DateTimeFormat("ru-RU", {
@@ -93,24 +89,6 @@ function statusLabel(status: string): string {
   return "В работе";
 }
 
-async function readJson<T>(url: string, options?: RequestInit): Promise<T> {
-  const res = await fetch(url, options);
-  if (!res.ok) {
-    const raw = await res.text();
-    let message = raw || `HTTP ${res.status}`;
-    if (raw) {
-      try {
-        const payload = JSON.parse(raw) as ApiError;
-        if (payload.detail) message = payload.detail;
-      } catch {
-        // keep raw text message
-      }
-    }
-    throw new Error(message);
-  }
-  return res.json();
-}
-
 export default function StoredProfilesPanel() {
   const [profiles, setProfiles] = useState<StoredProfileListItem[]>([]);
   const [selectedId, setSelectedId] = useState<number | null>(null);
@@ -135,7 +113,7 @@ export default function StoredProfilesPanel() {
   async function loadProfiles(preserveSelection = true) {
     setRefreshing(true);
     try {
-      const payload = await readJson<{ profiles: StoredProfileListItem[] }>(toAppUrl("/api/exported-profiles"));
+      const payload = await requestJson<{ profiles: StoredProfileListItem[] }>("/api/exported-profiles");
       setProfiles(payload.profiles);
       setSelectedId((current) => {
         if (preserveSelection && current && payload.profiles.some((profile) => profile.id === current)) {
@@ -163,7 +141,7 @@ export default function StoredProfilesPanel() {
 
     let cancelled = false;
     setLoadingDetail(true);
-    void readJson<StoredProfileDetail>(toAppUrl(`/api/exported-profiles/${selectedId}`))
+    void requestJson<StoredProfileDetail>(`/api/exported-profiles/${selectedId}`)
       .then((payload) => {
         if (!cancelled) setDetail(payload);
       })
@@ -187,8 +165,8 @@ export default function StoredProfilesPanel() {
     setResending(true);
     setMessage(null);
     try {
-      const result = await readJson<{ status: string; error?: string; url?: string }>(
-        toAppUrl(`/api/exported-profiles/${detail.id}/resend`),
+      const result = await requestJson<{ status: string; error?: string; url?: string }>(
+        `/api/exported-profiles/${detail.id}/resend`,
         { method: "POST" }
       );
       if (result.status === "OK") {
@@ -197,7 +175,7 @@ export default function StoredProfilesPanel() {
         setMessage({ ok: false, text: result.error || "Повторная отправка завершилась ошибкой" });
       }
       await loadProfiles(true);
-      const refreshed = await readJson<StoredProfileDetail>(toAppUrl(`/api/exported-profiles/${detail.id}`));
+      const refreshed = await requestJson<StoredProfileDetail>(`/api/exported-profiles/${detail.id}`);
       setDetail(refreshed);
     } catch (err) {
       setMessage({ ok: false, text: err instanceof Error ? err.message : "Повторная отправка не удалась" });

@@ -3,6 +3,7 @@ import re
 import logging
 import random
 import time
+import html
 import requests
 import redis
 from PIL import Image
@@ -335,11 +336,16 @@ def _find_cached_download(folder_name: str, target_dir: str, file_name: str, sou
 
 
 def _safe_search_wiki_title(name: str) -> Optional[str]:
+    titles = _safe_search_wiki_titles(name, limit=1)
+    return titles[0] if titles else None
+
+
+def _safe_search_wiki_titles(name: str, limit: int = 5) -> list[str]:
     params = {
         "action": "query",
         "list": "search",
         "srsearch": name,
-        "srlimit": 1,
+        "srlimit": max(1, min(limit, 10)),
         "srnamespace": 0,
         "format": "json",
     }
@@ -352,14 +358,105 @@ def _safe_search_wiki_title(name: str) -> Optional[str]:
         purpose=f"title search for {name}",
     )
     if not data:
-        return None
+        return []
 
     results = data.get("query", {}).get("search", [])
-    if results:
-        title = results[0]["title"]
-        logger.info("Wiki search '%s' → '%s'", name, title)
-        return title
-    return None
+    titles: list[str] = []
+    for item in results:
+        title = item.get("title")
+        if isinstance(title, str) and title and title not in titles:
+            titles.append(title)
+    if titles:
+        logger.info("Wiki search '%s' → %s", name, titles[:3])
+    return titles
+
+
+def _fetch_summary_by_title(title: str, *, purpose_name: str) -> dict | None:
+    url = WIKI_SUMMARY_URL.format(title=_wiki_title(title))
+    data = _request_wikimedia_json(
+        url,
+        headers=HEADERS,
+        timeout=settings.wiki_request_timeout_seconds,
+        purpose=f"summary lookup for {purpose_name}",
+    )
+    if not data or not data.get("title"):
+        return None
+    return data
+
+
+def _normalize_title_key(value: str) -> str:
+    cleaned = re.sub(r"\s+", " ", value.replace("_", " ")).strip().lower()
+    return cleaned
+
+
+def _extract_disambiguation_candidates(summary_text: str) -> list[dict]:
+    if not isinstance(summary_text, str) or not summary_text.strip():
+        return []
+
+    candidates: list[dict] = []
+    seen: set[str] = set()
+    text = summary_text.replace("\r\n", "\n").replace("\r", "\n")
+    if ":" in text:
+        text = text.split(":", 1)[1]
+
+    for raw_line in text.split("\n"):
+        line = html.unescape(re.sub(r"\s+", " ", raw_line).strip(" \t\n\r-—•"))
+        if not line:
+            continue
+        if " — " in line:
+            left, right = line.split(" — ", 1)
+        else:
+            left, right = line, ""
+
+        title = re.sub(r"\s+", " ", left).strip(" ,;")
+        description = re.sub(r"\s+", " ", right).strip()
+        if not title:
+            continue
+
+        key = _normalize_title_key(title)
+        if key in seen:
+            continue
+        seen.add(key)
+        candidates.append({"title": title, "description": description})
+
+    return candidates
+
+
+def _extract_query_hints(name: str) -> list[str]:
+    if not isinstance(name, str):
+        return []
+
+    hints: list[str] = []
+    for paren in re.findall(r"\(([^)]+)\)", name):
+        for token in re.findall(r"[а-яёa-z0-9]+(?:-[а-яёa-z0-9]+)?", paren.lower()):
+            if token not in hints:
+                hints.append(token)
+
+    for year in re.findall(r"\b(?:1[89]\d{2}|20\d{2})\b", name):
+        if year not in hints:
+            hints.append(year)
+    return hints
+
+
+def _resolve_ambiguous_candidate(requested_name: str, candidates: list[dict]) -> str | None:
+    hints = _extract_query_hints(requested_name)
+    if not hints:
+        return None
+
+    scored: list[tuple[int, str]] = []
+    for candidate in candidates:
+        haystack = f"{candidate.get('title', '')} {candidate.get('description', '')}".lower()
+        score = sum(1 for hint in hints if hint in haystack)
+        if score > 0:
+            scored.append((score, candidate.get("title", "")))
+
+    if not scored:
+        return None
+
+    scored.sort(key=lambda item: item[0], reverse=True)
+    if len(scored) > 1 and scored[0][0] == scored[1][0]:
+        return None
+    return scored[0][1] or None
 
 
 def _safe_get_pageimage(title: str) -> Optional[str]:
@@ -596,19 +693,26 @@ def _get_pageimage(title: str) -> Optional[str]:
 
 
 def fetch_person_from_wikipedia(name: str) -> Optional[Dict]:
-    wiki_title = _search_wiki_title(name) or name
-    url = WIKI_SUMMARY_URL.format(title=_wiki_title(wiki_title))
-    data = _request_wikimedia_json(
-        url,
-        headers=HEADERS,
-        timeout=settings.wiki_request_timeout_seconds,
-        purpose=f"summary lookup for {name}",
-    )
+    data = _fetch_summary_by_title(name, purpose_name=name)
+    wiki_title = name
+    if not data:
+        wiki_title = _search_wiki_title(name) or name
+        data = _fetch_summary_by_title(wiki_title, purpose_name=name)
     if not data:
         return None
 
     if not data.get("title"):
         return None
+
+    is_ambiguous = data.get("type") == "disambiguation"
+    ambiguity_candidates = _extract_disambiguation_candidates(data.get("extract", "")) if is_ambiguous else []
+    resolved_candidate = _resolve_ambiguous_candidate(name, ambiguity_candidates) if is_ambiguous else None
+    if resolved_candidate:
+        resolved_data = _fetch_summary_by_title(resolved_candidate, purpose_name=name)
+        if resolved_data and resolved_data.get("type") != "disambiguation":
+            data = resolved_data
+            is_ambiguous = False
+            ambiguity_candidates = []
 
     result = {
         "name": data.get("title"),
@@ -618,14 +722,17 @@ def fetch_person_from_wikipedia(name: str) -> Optional[Dict]:
         "death": None,
         "wiki_url": None,
         "images": [],
+        "is_ambiguous": is_ambiguous,
+        "ambiguity_candidates": ambiguity_candidates,
     }
 
     urls = data.get("content_urls", {})
     desktop = urls.get("desktop", {})
     result["wiki_url"] = desktop.get("page")
-    result["source_text"] = _safe_get_page_extract(result["name"]) or result["summary_text"]
+    if not is_ambiguous:
+        result["source_text"] = _safe_get_page_extract(result["name"]) or result["summary_text"]
 
-    qid = _get_wikidata_id(result["name"])
+    qid = _get_wikidata_id(result["name"]) if not is_ambiguous else None
     if qid:
         dates = _get_birth_death_from_wikidata(qid)
         result["birth"] = dates["birth"]
@@ -647,14 +754,10 @@ def fetch_person_from_wikipedia(name: str) -> Optional[Dict]:
 
 def fetch_person_images(name: str) -> list[dict]:
     try:
-        wiki_title = _safe_search_wiki_title(name) or name
-        summary_url = WIKI_SUMMARY_URL.format(title=_wiki_title(wiki_title))
-        summary_data = _request_wikimedia_json(
-            summary_url,
-            headers=HEADERS,
-            timeout=settings.wiki_request_timeout_seconds,
-            purpose=f"summary lookup for {name}",
-        ) or {}
+        summary_data = _fetch_summary_by_title(name, purpose_name=name) or {}
+        wiki_title = summary_data.get("title") or _safe_search_wiki_title(name) or name
+        if not summary_data:
+            summary_data = _fetch_summary_by_title(wiki_title, purpose_name=name) or {}
 
         original = summary_data.get("originalimage", {})
         src = original.get("source", "")

@@ -12,6 +12,11 @@ import re
 from typing import Any, Callable
 
 from app.services.deepseek_service import DeepSeekServiceError
+from app.services.source_verification_service import (
+    build_source_excerpt,
+    build_source_units as verification_build_source_units,
+    verify_biography_against_source,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -21,6 +26,8 @@ MISSING_DEATH_DATE = "missing_death_date"
 MISSING_ACTIVITY = "missing_activity"
 MISSING_ACHIEVEMENTS = "missing_achievements"
 MISSING_SOURCE_NOTES = "missing_source_notes"
+AMBIGUOUS_SOURCE = "ambiguous_source"
+SOURCE_VERIFICATION_FAILED = "source_verification_failed"
 
 _WHITESPACE_RE = re.compile(r"\s+")
 _MAX_NAME_LENGTH = 120
@@ -29,6 +36,8 @@ _MAX_SOURCE_TEXT_LENGTH = 24000
 _MAX_ACTIVITY_LENGTH = 240
 _MAX_ACHIEVEMENTS = 8
 _MAX_BIOGRAPHY_LENGTH = 20000
+_MAX_BIOGRAPHY_WORDS = 700
+_TARGET_SOURCE_BIOGRAPHY_WORDS = 560
 _MIN_SOURCE_COVERAGE_RATIO = 0.75
 
 
@@ -128,6 +137,8 @@ def normalize_biography_input(source_person: Any, requested_name: str | None = N
         "full_name": full_name,
         "birth_date": _first_non_empty(raw.get("birth_date"), raw.get("birth"), max_length=120),
         "death_date": _first_non_empty(raw.get("death_date"), raw.get("death"), max_length=120),
+        "is_ambiguous": bool(raw.get("is_ambiguous")),
+        "ambiguity_candidates": raw.get("ambiguity_candidates") if isinstance(raw.get("ambiguity_candidates"), list) else [],
         "activity": _first_non_empty(
             raw.get("activity"),
             raw.get("occupation"),
@@ -189,6 +200,8 @@ def build_biography_warnings(normalized: dict[str, Any]) -> list[str]:
         warnings.append(MISSING_ACHIEVEMENTS)
     if not normalized.get("source_text") and not normalized.get("source_notes"):
         warnings.append(MISSING_SOURCE_NOTES)
+    if normalized.get("is_ambiguous"):
+        warnings.append(AMBIGUOUS_SOURCE)
 
     return warnings
 
@@ -206,8 +219,13 @@ def _has_material_facts(normalized: dict[str, Any]) -> bool:
     )
 
 
+def _is_ambiguous_source(normalized: dict[str, Any]) -> bool:
+    return bool(normalized.get("is_ambiguous"))
+
+
 def build_biography_context(normalized: dict[str, Any]) -> str:
     lines: list[str] = []
+    display_name = _normalize_display_name(normalized.get("full_name", ""))
 
     if normalized.get("full_name"):
         lines.append(f"Полное имя: {normalized['full_name']}")
@@ -221,8 +239,9 @@ def build_biography_context(normalized: dict[str, Any]) -> str:
         lines.append("Подтвержденные достижения:")
         lines.extend(f"- {item}" for item in normalized["achievements"])
     if normalized.get("source_text"):
+        source_excerpt = build_source_excerpt(normalized["source_text"], display_name=display_name)
         lines.append("Полный подтвержденный текст источника:")
-        lines.append(normalized["source_text"])
+        lines.append(source_excerpt or normalized["source_text"])
     if normalized.get("source_notes"):
         lines.append(f"Примечания источника: {normalized['source_notes']}")
 
@@ -305,6 +324,73 @@ def _count_words(text: str) -> int:
     return len(re.findall(r"[а-яёa-z0-9]+(?:-[а-яёa-z0-9]+)?", text.lower()))
 
 
+def _truncate_sentence_to_word_limit(text: str, max_words: int) -> str:
+    if max_words <= 0:
+        return ""
+
+    words: list[str] = []
+    result_chars: list[str] = []
+    for part in re.finditer(r"\S+|\s+", text):
+        chunk = part.group(0)
+        if chunk.isspace():
+            if result_chars and not result_chars[-1].isspace():
+                result_chars.append(" ")
+            continue
+
+        token_words = _count_words(chunk)
+        if token_words > 0 and len(words) + token_words > max_words:
+            break
+
+        result_chars.append(chunk)
+        if token_words > 0:
+            words.extend(re.findall(r"[а-яёa-z0-9]+(?:-[а-яёa-z0-9]+)?", chunk.lower()))
+
+    truncated = "".join(result_chars).strip(" ,;:-")
+    return _append_period(truncated) if truncated else ""
+
+
+def _truncate_biography_to_word_limit(text: str, max_words: int = _MAX_BIOGRAPHY_WORDS) -> str:
+    cleaned = _clean_multiline_text(text, max_length=_MAX_BIOGRAPHY_LENGTH)
+    if not cleaned or _count_words(cleaned) <= max_words:
+        return cleaned
+
+    lines = cleaned.split("\n")
+    kept_lines: list[str] = []
+    used_words = 0
+
+    for line in lines:
+        stripped = line.strip()
+        if not stripped:
+            if kept_lines and kept_lines[-1] != "":
+                kept_lines.append("")
+            continue
+
+        line_words = _count_words(stripped)
+        if line_words == 0:
+            kept_lines.append(stripped)
+            continue
+
+        remaining_words = max_words - used_words
+        if remaining_words <= 0:
+            break
+
+        if line_words <= remaining_words:
+            kept_lines.append(stripped)
+            used_words += line_words
+            continue
+
+        truncated_line = _truncate_sentence_to_word_limit(stripped, remaining_words)
+        if truncated_line:
+            kept_lines.append(truncated_line)
+            used_words += _count_words(truncated_line)
+        break
+
+    while kept_lines and kept_lines[-1] == "":
+        kept_lines.pop()
+
+    return _clean_multiline_text("\n".join(kept_lines), max_length=_MAX_BIOGRAPHY_LENGTH)
+
+
 def _is_heading_like_line(line: str) -> bool:
     if not line:
         return True
@@ -314,25 +400,15 @@ def _is_heading_like_line(line: str) -> bool:
 
 
 def _build_source_units(source_text: str, display_name: str) -> list[str]:
-    cleaned = _clean_multiline_text(source_text, max_length=_MAX_SOURCE_TEXT_LENGTH)
-    if not cleaned:
-        return []
-
-    units: list[str] = []
-    for raw_line in cleaned.split("\n"):
-        line = _clean_string(raw_line, max_length=_MAX_SOURCE_TEXT_LENGTH)
-        if not line or _is_heading_like_line(line):
-            continue
-        if display_name:
-            line = _strip_leading_name_clause(line, display_name)
-        for part in re.split(r"(?<=[.!?…])\s+", line):
-            sentence = _append_period(_clean_string(part, max_length=_MAX_SOURCE_TEXT_LENGTH))
-            if sentence:
-                units.append(sentence)
-    return units
+    units = verification_build_source_units(source_text, display_name=display_name)
+    return [_append_period(_clean_string(unit, max_length=_MAX_SOURCE_TEXT_LENGTH)) for unit in units if unit]
 
 
-def _select_source_units_for_coverage(units: list[str], min_ratio: float = _MIN_SOURCE_COVERAGE_RATIO) -> list[str]:
+def _select_source_units_for_coverage(
+    units: list[str],
+    min_ratio: float = _MIN_SOURCE_COVERAGE_RATIO,
+    max_words: int = _TARGET_SOURCE_BIOGRAPHY_WORDS,
+) -> list[str]:
     if not units:
         return []
 
@@ -341,12 +417,15 @@ def _select_source_units_for_coverage(units: list[str], min_ratio: float = _MIN_
         return units
 
     target_words = total_words if total_words <= 120 else math.ceil(total_words * min_ratio)
+    target_words = min(target_words, max_words)
     selected: list[str] = []
     selected_words = 0
     cumulative_words = 0
 
     for index, unit in enumerate(units):
         unit_words = max(1, _count_words(unit))
+        if selected and selected_words + unit_words > max_words:
+            continue
         cumulative_words += unit_words
         desired_words = math.ceil(cumulative_words * (target_words / total_words))
         remaining_words = sum(_count_words(item) for item in units[index + 1 :])
@@ -372,7 +451,14 @@ def _group_source_units_into_sections(units: list[str]) -> list[tuple[str, str]]
     if not units:
         return []
 
-    titles = ["🕯️ Биография", "📚 Путь и дело", "🕊️ Память"]
+    titles = [
+        "🌌 Сквозь биографию",
+        "🌳 Ранние годы",
+        "🏛 Путь и дело",
+        "🎨 Главное дело",
+        "👤 Документальный облик",
+        "📜 Наследие",
+    ]
     section_count = min(len(titles), max(1, len(units)))
     chunk_size = math.ceil(len(units) / section_count)
     sections: list[tuple[str, str]] = []
@@ -386,6 +472,41 @@ def _group_source_units_into_sections(units: list[str]) -> list[tuple[str, str]]
     return sections
 
 
+def _build_source_header_lines(display_name: str, normalized: dict[str, Any]) -> list[str]:
+    lines: list[str] = []
+    birth = normalized.get("birth_date")
+    death = normalized.get("death_date")
+
+    if birth and death:
+        lines.append(f"{birth} — {death}")
+    elif birth:
+        lines.append(birth)
+    elif death:
+        lines.append(death)
+
+    if display_name:
+        lines.append(display_name)
+
+    birth_year = re.search(r"\b(\d{4})\b", birth or "")
+    death_year = re.search(r"\b(\d{4})\b", death or "")
+    if birth_year and death_year:
+        lines.append(f"{birth_year.group(1)} — {death_year.group(1)}")
+    elif birth_year:
+        lines.append(birth_year.group(1))
+    elif death_year:
+        lines.append(death_year.group(1))
+
+    return lines
+
+
+def _build_source_closing_lines(display_name: str, normalized: dict[str, Any]) -> list[str]:
+    activity = normalized.get("activity") or "дело жизни"
+    return [
+        f"🌹 Память о {display_name} сохраняется там, где остаются подтвержденные документы, работы и свидетельства его пути.",
+        f"🕊️ Этот биографический рассказ держится на реальных источниках и уважении к {activity}.",
+    ]
+
+
 def _compose_biography_from_source_text(display_name: str, normalized: dict[str, Any]) -> str:
     source_text = normalized.get("source_text") or ""
     units = _build_source_units(source_text, display_name)
@@ -397,20 +518,18 @@ def _compose_biography_from_source_text(display_name: str, normalized: dict[str,
     if not sections:
         return ""
 
-    lines = [display_name] if display_name else []
-    if normalized.get("birth_date") and normalized.get("death_date"):
-        lines.append(f"{normalized['birth_date']} — {normalized['death_date']}")
-    elif normalized.get("birth_date"):
-        lines.append(f"Родился: {normalized['birth_date']}")
-    elif normalized.get("death_date"):
-        lines.append(f"Скончался: {normalized['death_date']}")
+    lines = _build_source_header_lines(display_name, normalized)
 
     section_lines: list[str] = []
     for title, paragraph in sections:
         section_lines.append(title)
         section_lines.append(paragraph)
 
-    return _clean_multiline_text("\n".join(lines) + "\n\n" + "\n\n".join(section_lines), max_length=_MAX_BIOGRAPHY_LENGTH)
+    section_lines.extend(["", *_build_source_closing_lines(display_name, normalized)])
+
+    return _truncate_biography_to_word_limit(
+        _clean_multiline_text("\n".join(lines) + "\n\n" + "\n\n".join(section_lines), max_length=_MAX_BIOGRAPHY_LENGTH)
+    )
 
 
 def _has_substantial_source_text(normalized: dict[str, Any]) -> bool:
@@ -475,8 +594,8 @@ def _is_generated_grounded(candidate: str, normalized: dict[str, Any]) -> bool:
 
 
 def _should_prefer_fact_composition(normalized: dict[str, Any]) -> bool:
-    if _has_substantial_source_text(normalized):
-        return True
+    if normalized.get("source_text"):
+        return False
     if normalized.get("activity") or normalized.get("achievements"):
         return False
     return bool(normalized.get("source_notes"))
@@ -577,7 +696,59 @@ def _build_memory_paragraph(display_name: str, normalized: dict[str, Any]) -> st
     return " ".join(sentences)
 
 
+def _build_ambiguous_biography(normalized: dict[str, Any]) -> str:
+    display_name = _normalize_display_name(normalized.get("full_name", "")) or "Этот человек"
+    lines = [display_name]
+
+    safe_lines = [
+        "🕯️ Биография",
+        "Найденные источники недостаточны для однозначного определения личности. Ниже приведены только безопасно подтвержденные сведения.",
+        "",
+        "📚 Путь и дело",
+    ]
+
+    details: list[str] = []
+    if normalized.get("birth_date") and normalized.get("death_date"):
+        details.append(f"Подтверждены даты жизни: {normalized['birth_date']} — {normalized['death_date']}.")
+    elif normalized.get("birth_date"):
+        details.append(f"Подтверждена дата рождения: {normalized['birth_date']}.")
+    elif normalized.get("death_date"):
+        details.append(f"Подтверждена дата смерти: {normalized['death_date']}.")
+
+    if normalized.get("activity"):
+        details.append(f"Подтверждена только общая сфера деятельности: {normalized['activity']}.")
+    if normalized.get("achievements"):
+        details.append("Доступны отдельные подтвержденные упоминания о достижениях без безопасной полной атрибуции.")
+
+    candidates = normalized.get("ambiguity_candidates") or []
+    if not details:
+        details.append("В открытых источниках это имя относится к нескольким разным людям, поэтому неподтвержденные детали исключены.")
+
+    safe_lines.append(" ".join(details))
+    if candidates:
+        safe_lines.extend(["", "В источнике найдены такие варианты:"])
+        for candidate in candidates[:5]:
+            title = _clean_string(candidate.get("title", ""), max_length=180)
+            description = _clean_string(candidate.get("description", ""), max_length=240)
+            if title and description:
+                safe_lines.append(f"{title} — {description}.")
+            elif title:
+                safe_lines.append(title)
+    safe_lines.extend(
+        [
+            "",
+            "🕊️ Память",
+            "Для точного биографического текста нужен более конкретный источник или уточнение личности в запросе, например с указанием профессии или годов жизни.",
+        ]
+    )
+
+    return _clean_multiline_text("\n".join(lines) + "\n\n" + "\n".join(safe_lines), max_length=_MAX_BIOGRAPHY_LENGTH)
+
+
 def compose_biography_from_facts(normalized: dict[str, Any]) -> str:
+    if _is_ambiguous_source(normalized):
+        return _build_ambiguous_biography(normalized)
+
     display_name = _normalize_display_name(normalized.get("full_name", ""))
     if not display_name:
         display_name = "Этот человек"
@@ -636,6 +807,7 @@ def build_fallback_biography(normalized: dict[str, Any]) -> str:
 
 def _sanitize_generated_biography(text: Any) -> str:
     cleaned = _clean_multiline_text(text, max_length=_MAX_BIOGRAPHY_LENGTH)
+    cleaned = _truncate_biography_to_word_limit(cleaned)
     return cleaned
 
 
@@ -652,12 +824,15 @@ def _safe_llm_generate(
     style: str | None,
     llm_generate: Callable[..., Any],
     uniqueness_check: Callable[[str, str], bool] | None = None,
-) -> tuple[str, list[str]]:
+) -> tuple[str, list[str], bool]:
     if not _has_material_facts(normalized):
-        return "", []
+        return "", [], True
+
+    if _is_ambiguous_source(normalized):
+        return compose_biography_from_facts(normalized), [AMBIGUOUS_SOURCE], True
 
     if _should_prefer_fact_composition(normalized):
-        return compose_biography_from_facts(normalized), []
+        return compose_biography_from_facts(normalized), [], True
 
     context = build_biography_context(normalized)
 
@@ -680,16 +855,30 @@ def _safe_llm_generate(
     if uniqueness_check and source_notes:
         try:
             if not uniqueness_check(candidate, source_notes):
-                return compose_biography_from_facts(normalized), []
+                return compose_biography_from_facts(normalized), [], True
         except DeepSeekServiceError:
             raise
         except Exception as exc:
             logger.warning("Biography uniqueness check failed: %s", exc)
 
-    if not _is_generated_grounded(candidate, normalized):
-        return compose_biography_from_facts(normalized), []
+    display_name = _normalize_display_name(normalized.get("full_name", ""))
+    verification = verify_biography_against_source(
+        candidate,
+        source_text=normalized.get("source_text") or normalized.get("source_notes") or "",
+        display_name=display_name,
+        extra_grounding_text=_build_grounding_text(normalized),
+    )
+    if not verification["is_verified"]:
+        logger.warning(
+            "Biography source verification failed; unsupported_sentences=%s",
+            verification["unsupported_sentences"][:3],
+        )
+        return compose_biography_from_facts(normalized), [SOURCE_VERIFICATION_FAILED], True
 
-    return candidate, []
+    if not normalized.get("source_text") and not _is_generated_grounded(candidate, normalized):
+        return compose_biography_from_facts(normalized), [SOURCE_VERIFICATION_FAILED], True
+
+    return candidate, [], False
 
 
 def generate_biography_text(
@@ -716,7 +905,7 @@ def generate_biography_text(
     biography = ""
 
     try:
-        biography, extra_warnings = _safe_llm_generate(
+        biography, extra_warnings, used_fallback = _safe_llm_generate(
             normalized,
             style,
             llm_generate,
@@ -726,9 +915,11 @@ def generate_biography_text(
     except DeepSeekServiceError as exc:
         logger.warning("Biography generation switched to deterministic fact composition: %s", exc)
         biography = compose_biography_from_facts(normalized)
+        used_fallback = True
     except Exception as exc:  # pragma: no cover - final safety net
         logger.exception("Unexpected biography generation failure: %s", exc)
         biography = compose_biography_from_facts(normalized)
+        used_fallback = True
 
     biography = _sanitize_generated_biography(biography)
     if not biography:

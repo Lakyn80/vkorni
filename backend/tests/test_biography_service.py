@@ -23,10 +23,13 @@ VALID_PERSON = {
 
 def _llm_success(context: str, style: str | None):
     return (
-        "Лев Яшин остается одной из самых заметных фигур советского футбола. "
-        "Его путь в спорте связан с игрой на позиции вратаря, крупными турнирами "
-        "и устойчивой памятью о его вкладе в историю футбола.",
-        "factual_memorial",
+        "Лев Яшин\n"
+        "22 октября 1929 — 20 марта 1990\n\n"
+        "🕯️ Биография\n\n"
+        "Лев Яшин — советский футбольный вратарь, выступавший за клуб и сборную.\n\n"
+        "📚 Путь и дело\n\n"
+        "Среди подтвержденных достижений упоминаются олимпийский чемпион и чемпион Европы.",
+        "chronology_focus",
     )
 
 
@@ -67,25 +70,170 @@ def test_generate_biography_with_full_source_text_skips_llm_and_keeps_source_cov
         ),
     }
 
+    candidate = (
+        "Тестовый Человек\n"
+        "1900 — 1980\n\n"
+        "🕯️ Биография\n\n"
+        "Тестовый Человек родился в семье служащих и получил базовое образование в родном городе. "
+        "В ранние годы он проявил интерес к технике и общественной деятельности.\n\n"
+        "📚 Путь и дело\n\n"
+        "Позднее он работал в нескольких учреждениях и участвовал в профильных проектах. "
+        "В разные периоды его биографии упоминаются поездки, публикации и организационная работа.\n\n"
+        "🕊️ Память\n\n"
+        "Сохранившиеся сведения описывают его деятельность в хронологическом и документальном порядке. "
+        "После смерти упоминания о нём продолжают встречаться в биографических и справочных публикациях."
+    )
+
     result = generate_biography_text(
         source_person=person,
         requested_name="Тестовый Человек",
         style="style",
-        llm_generate=lambda context, style: (_ for _ in ()).throw(AssertionError("LLM should not be used")),
+        llm_generate=lambda context, style: (candidate, "chronology_focus"),
+        uniqueness_check=lambda candidate, source: True,
     )
 
-    content = result["biography"]
-    for marker in ("Тестовый Человек", "1900 — 1980", "🕯️ Биография", "📚 Путь и дело", "🕊️ Память"):
-        content = content.replace(marker, "")
+    assert result["used_fallback"] is False
+    assert result["biography"] == candidate
+    assert result["warnings"] == ["missing_activity", "missing_achievements"]
 
-    source_words = len(re.findall(r"[а-яёa-z0-9]+(?:-[а-яёa-z0-9]+)?", person["source_text"].lower()))
-    content_words = len(re.findall(r"[а-яёa-z0-9]+(?:-[а-яёa-z0-9]+)?", content.lower()))
+
+def test_generate_biography_rejects_hallucinated_llm_output_against_source():
+    person = {
+        "name": "Тестовый Человек",
+        "birth": "1900",
+        "death": "1980",
+        "source_text": (
+            "Тестовый Человек родился в семье служащих и получил базовое образование в родном городе. "
+            "Позднее он работал в нескольких учреждениях и участвовал в профильных проектах. "
+            "После смерти упоминания о нём продолжают встречаться в биографических и справочных публикациях."
+        ),
+    }
+
+    candidate = (
+        "Тестовый Человек\n"
+        "1900 — 1980\n\n"
+        "🕯️ Биография\n\n"
+        "Тестовый Человек родился в семье служащих и получил базовое образование в родном городе.\n\n"
+        "👤 Характер\n\n"
+        "Его друзья вспоминали его как замкнутого человека, который не доверял коллегам."
+    )
+
+    result = generate_biography_text(
+        source_person=person,
+        requested_name="Тестовый Человек",
+        style="style",
+        llm_generate=lambda context, style: (candidate, "human_flaw"),
+        uniqueness_check=lambda candidate, source: True,
+    )
+
+    assert result["used_fallback"] is True
+    assert result["biography"] != candidate
+    assert "source_verification_failed" in result["warnings"]
+    assert "🕯️ Биография" in result["biography"]
+
+
+def test_generate_biography_for_ambiguous_person_returns_safe_notice():
+    person = {
+        "name": "Владимир Сергеевич Лукьянов",
+        "is_ambiguous": True,
+        "ambiguity_candidates": [
+            {"title": "Лукьянов, Владимир Сергеевич (1902—1980)", "description": "советский учёный"},
+            {"title": "Лукьянов, Владимир Сергеевич (архитектор)", "description": "советский, российский архитектор, художник"},
+        ],
+        "summary_text": (
+            "Лукьянов, Владимир Сергеевич (1902—1980) — советский учёный. "
+            "Лукьянов, Владимир Сергеевич — советский, российский архитектор, художник. "
+            "Лукьянов, Владимир Сергеевич (1952—2009) — советский лыжник, тренер."
+        ),
+    }
+
+    result = generate_biography_text(
+        source_person=person,
+        requested_name="Владимир Сергеевич Лукьянов",
+        style="style",
+        llm_generate=lambda context, style: ("опасный текст", "style"),
+        uniqueness_check=lambda candidate, source: True,
+    )
+
+    assert result["used_fallback"] is True
+    assert "ambiguous_source" in result["warnings"]
+    assert "недостаточны для однозначного определения личности" in result["biography"]
+    assert "Лукьянов, Владимир Сергеевич (архитектор)" in result["biography"]
+    assert "гидравлического интегратора" not in result["biography"]
+
+
+def test_compose_biography_from_facts_with_substantial_source_text_uses_memorial_sections():
+    normalized = normalize_biography_input(
+        {
+            "name": "Тестовый Человек",
+            "birth": "18 августа 1945",
+            "source_text": (
+                "Тестовый Человек родился в послевоенные годы и получил художественное образование. "
+                "В ранние годы он жил в Ленинграде и постепенно вошёл в профессиональную среду. "
+                "Позднее он работал архитектором и участвовал в проектировании городских объектов. "
+                "Его деятельность соединяла проектную практику, графику и преподавание. "
+                "Сохранившиеся сведения описывают выставки, рабочие проекты и документальные упоминания. "
+                "Память о нём удерживается в биографических материалах и архивных источниках."
+            ),
+        },
+        requested_name="Тестовый Человек",
+    )
+
+    biography = compose_biography_from_facts(normalized)
+
+    assert "🌌 Сквозь биографию" in biography
+    assert "🏛 Путь и дело" in biography
+    assert "📜 Наследие" in biography
+    assert "🌹" in biography
+    assert "\n\n" in biography
+
+
+def test_compose_biography_from_facts_caps_long_source_text_to_700_words():
+    source_sentence = "Тестовый Человек последовательно работал с документальными материалами и участвовал в подтвержденных проектах."
+    normalized = normalize_biography_input(
+        {
+            "name": "Тестовый Человек",
+            "birth": "1900",
+            "death": "1980",
+            "source_text": " ".join([source_sentence] * 140),
+        },
+        requested_name="Тестовый Человек",
+    )
+
+    biography = compose_biography_from_facts(normalized)
+    word_count = len(re.findall(r"[а-яёa-z0-9]+(?:-[а-яёa-z0-9]+)?", biography.lower()))
+
+    assert word_count <= 700
+    assert "🌌 Сквозь биографию" in biography
+
+
+def test_generate_biography_truncates_llm_output_to_700_words():
+    candidate_body = " ".join(["Подтвержденное предложение о биографии и деятельности."] * 220)
+    candidate = (
+        "Тестовый Человек\n"
+        "1900 — 1980\n\n"
+        "🕯️ Биография\n\n"
+        f"{candidate_body}"
+    )
+    person = {
+        "name": "Тестовый Человек",
+        "birth": "1900",
+        "death": "1980",
+        "source_text": candidate_body,
+    }
+
+    result = generate_biography_text(
+        source_person=person,
+        requested_name="Тестовый Человек",
+        style="style",
+        llm_generate=lambda context, style: (candidate, "source_bound_profile"),
+        uniqueness_check=lambda candidate, source: True,
+    )
+
+    word_count = len(re.findall(r"[а-яёa-z0-9]+(?:-[а-яёa-z0-9]+)?", result["biography"].lower()))
 
     assert result["used_fallback"] is False
-    assert "🕯️ Биография" in result["biography"]
-    assert "📚 Путь и дело" in result["biography"]
-    assert "🕊️ Память" in result["biography"]
-    assert content_words >= int(source_words * 0.75)
+    assert word_count <= 700
 
 
 def test_generate_biography_missing_full_name_adds_warning():
@@ -199,7 +347,7 @@ def test_generate_biography_llm_failure_returns_fallback():
         style=None,
         llm_generate=_llm_fail,
     )
-    assert result["used_fallback"] is False
+    assert result["used_fallback"] is True
     assert result["biography"]
     assert "🕯️ Биография" in result["biography"]
     assert "📚 Путь и дело" in result["biography"]
@@ -212,7 +360,7 @@ def test_generate_biography_empty_llm_output_returns_fallback():
         style=None,
         llm_generate=lambda context, style: ("", "factual_memorial"),
     )
-    assert result["used_fallback"] is False
+    assert result["used_fallback"] is True
     assert result["biography"]
     assert "Лев Яшин" in result["biography"]
     assert "🕊️ Память" in result["biography"]
@@ -225,7 +373,7 @@ def test_generate_biography_invalid_llm_format_returns_fallback():
         style=None,
         llm_generate=lambda context, style: {"text": "bad"},
     )
-    assert result["used_fallback"] is False
+    assert result["used_fallback"] is True
     assert result["biography"]
     assert "Лев Яшин" in result["biography"]
 
