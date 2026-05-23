@@ -2,6 +2,7 @@
 const apiProxyTarget = (process.env.API_PROXY_TARGET || "http://localhost:8020").replace(/\/+$/, "");
 
 const nextConfig = {
+  output: "standalone",
   async rewrites() {
     return [
       {
