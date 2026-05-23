@@ -10,10 +10,14 @@ def test_build_system_prompt_matches_strict_source_only_contract():
     prompt = build_system_prompt(ANGLES[0], style="ритм без фактов")
 
     assert "Jsi produkční biografický editor." in prompt
+    assert "Napiš biografii pro pamětní projekt" in prompt
     assert "Smíš použít POUZE informace" in prompt
     assert "Nesmíš použít žádné vlastní znalosti" in prompt
-    assert "Nevymýšlej žádné profese" in prompt
+    assert "Nepiš jako Wikipedie." in prompt
+    assert "Památka" in prompt
+    assert "Nezačínej text náhodným detailem z konce článku." in prompt
     assert "Bezpečnost proti halucinacím" in prompt
+    assert "Nikdy nepřekroč 700 slov." in prompt
     assert "Vrať pouze finální biografický text." in prompt
 
 
