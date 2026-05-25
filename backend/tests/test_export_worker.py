@@ -86,10 +86,89 @@ def test_run_bulk_export_item_retries_failed_export(mock_get_job, mock_get_coold
     }
     mock_export.return_value = {"status": "ERROR", "error": "temporary error"}
 
-    run_bulk_export_item("eid-1", "Test")
+    with patch("app.workers.export_worker.get_photos_by_person", return_value=[]), \
+         patch("app.workers.export_worker.fetch_person_images", return_value=[]), \
+         patch("app.workers.export_worker.fetch_person_from_wikipedia", return_value=None):
+        run_bulk_export_item("eid-1", "Test")
 
     assert mock_update.call_args_list[0].kwargs["status"] == "running"
     mock_retry.assert_called_once_with("eid-1", "Test", 1, "temporary error")
+
+
+@patch("app.workers.export_worker.update_job")
+@patch("app.workers.export_worker.export_profile_to_vkorni")
+@patch("app.workers.export_worker.get_biography")
+@patch("app.workers.export_worker.get_attachment_limit_cooldown", return_value=None)
+@patch("app.workers.export_worker.get_bulk_export_job")
+def test_run_bulk_export_item_hydrates_missing_photos_before_export(mock_get_job, mock_get_cooldown, mock_get_bio, mock_export, mock_update):
+    mock_get_job.return_value = {"status": "queued", "attempts": 0}
+    mock_get_bio.return_value = {
+        "name": "Test",
+        "text": "Bio",
+        "photos": [],
+        "photo_sources": {},
+        "birth": "1900",
+        "death": "1990",
+    }
+    mock_export.return_value = {"status": "OK", "url": "https://vkorni.com/threads/1/"}
+
+    with patch("app.workers.export_worker.get_photos_by_person", return_value=[]), \
+         patch(
+             "app.workers.export_worker.fetch_person_images",
+             return_value=[{"file_path": "/static/photos/Test/a.webp", "source_url": "https://example.com/a.jpg"}],
+         ), \
+         patch("app.workers.export_worker.fetch_person_from_wikipedia") as mock_wiki, \
+         patch("app.workers.export_worker.set_biography") as mock_set_biography:
+        run_bulk_export_item("eid-1", "Test")
+
+    assert mock_export.call_args.kwargs["photos"] == ["/static/photos/Test/a.webp"]
+    assert mock_export.call_args.kwargs["photo_source_url"] == "https://example.com/a.jpg"
+    assert mock_export.call_args.kwargs["selected_photo_url"] == "/static/photos/Test/a.webp"
+    mock_set_biography.assert_called_once()
+    mock_wiki.assert_not_called()
+    assert mock_update.call_args_list[-1].kwargs["status"] == "done"
+
+
+@patch("app.workers.export_worker.update_job")
+@patch("app.workers.export_worker.export_profile_to_vkorni")
+@patch("app.workers.export_worker.get_biography", return_value=None)
+@patch("app.workers.export_worker.get_attachment_limit_cooldown", return_value=None)
+@patch("app.workers.export_worker.get_bulk_export_job")
+def test_run_bulk_export_item_generates_missing_cache_before_export(
+    mock_get_job,
+    mock_get_cooldown,
+    mock_get_bio,
+    mock_export,
+    mock_update,
+):
+    mock_get_job.return_value = {"status": "queued", "attempts": 0}
+    mock_export.return_value = {"status": "OK", "url": "https://vkorni.com/threads/1/"}
+
+    with patch(
+        "app.workers.export_worker.fetch_person_from_wikipedia",
+        return_value={"name": "Test", "images": ["/static/photos/Test/a.webp"]},
+    ), \
+         patch(
+             "app.workers.export_worker.generate_biography_text",
+             return_value={
+                 "name": "Test",
+                 "biography": "Generated bio",
+                 "birth": "1900",
+                 "death": "1990",
+                 "used_fallback": False,
+                 "warnings": [],
+             },
+         ), \
+         patch("app.workers.export_worker.fetch_person_images", return_value=[]), \
+         patch("app.workers.export_worker.get_photos_by_person", return_value=[]), \
+         patch("app.workers.export_worker.set_biography") as mock_set_biography:
+        run_bulk_export_item("eid-1", "Test")
+
+    mock_set_biography.assert_called_once()
+    assert mock_export.call_args.kwargs["name"] == "Test"
+    assert mock_export.call_args.kwargs["text"] == "Generated bio"
+    assert mock_export.call_args.kwargs["photos"] == ["/static/photos/Test/a.webp"]
+    assert mock_update.call_args_list[-1].kwargs["status"] == "done"
 
 
 @patch("app.workers.export_worker._schedule_export_attempt")

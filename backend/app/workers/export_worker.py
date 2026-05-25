@@ -15,8 +15,13 @@ from app.services.bulk_export_service import (
     set_attachment_limit_cooldown,
     update_job,
 )
-from app.services.cache_service import get_biography
+from app.db.photos_repo import get_photos_by_person
+from app.services.biography_service import generate_biography_text
+from app.services.cache_service import get_biography, set_biography
+from app.services.deepseek_service import generate_text
 from app.services.export_service import export_profile_to_vkorni
+from app.services.uniqueness_service import is_unique_enough
+from app.services.wiki_service import fetch_person_from_wikipedia, fetch_person_images
 from app.workers.queue_backend import enqueue_job
 
 logger = logging.getLogger(__name__)
@@ -115,6 +120,173 @@ def _schedule_retry_or_fail(export_id: str, name: str, attempts: int, error: str
     logger.error("bulk export permanently failed for %s after %d attempts: %s", name, attempts, error)
 
 
+def _dedupe_preserve_order(values: list[str | None]) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for value in values:
+        if not value or value in seen:
+            continue
+        seen.add(value)
+        result.append(value)
+    return result
+
+
+def _rows_to_photo_payload(rows: list[dict]) -> tuple[list[str], dict[str, str]]:
+    photos = [row["file_path"] for row in rows if row.get("file_path")]
+    photo_sources = {
+        row["file_path"]: row["source_url"]
+        for row in rows
+        if row.get("file_path") and row.get("source_url")
+    }
+    return photos, photo_sources
+
+
+def _downloaded_to_photo_payload(downloaded: list[dict]) -> tuple[list[str], dict[str, str]]:
+    photos = [item["file_path"] for item in downloaded if item.get("file_path")]
+    photo_sources = {
+        item["file_path"]: item["source_url"]
+        for item in downloaded
+        if item.get("file_path") and item.get("source_url")
+    }
+    return photos, photo_sources
+
+
+def _build_export_profile_on_demand(name: str) -> dict:
+    person = fetch_person_from_wikipedia(name)
+
+    try:
+        from app.services.chroma_service import get_style_context
+        style = get_style_context()
+    except Exception:
+        logger.exception("bulk export style lookup failed while preparing %s", name)
+        style = None
+
+    generation = generate_biography_text(
+        source_person=person,
+        requested_name=name,
+        style=style,
+        llm_generate=generate_text,
+        uniqueness_check=is_unique_enough,
+    )
+
+    try:
+        downloaded = fetch_person_images(name) or []
+    except Exception:
+        logger.exception("bulk export photo fetch failed while preparing %s", name)
+        downloaded = []
+
+    try:
+        photo_rows = get_photos_by_person(name)
+    except Exception:
+        logger.exception("bulk export photo repository lookup failed while preparing %s", name)
+        photo_rows = []
+
+    if downloaded:
+        photos, photo_sources = _downloaded_to_photo_payload(downloaded)
+    elif photo_rows:
+        photos, photo_sources = _rows_to_photo_payload(photo_rows)
+    else:
+        photos = [
+            image
+            for image in ((person or {}).get("images") or [])
+            if isinstance(image, str) and image
+        ]
+        photo_sources = {photo: photo for photo in photos}
+
+    cached = {
+        "name": generation.get("name") or name,
+        "text": generation.get("biography") or "",
+        "photos": photos,
+        "birth": generation.get("birth"),
+        "death": generation.get("death"),
+        "photo_sources": photo_sources,
+    }
+
+    try:
+        set_biography(
+            name,
+            cached["text"],
+            photos,
+            birth=cached.get("birth"),
+            death=cached.get("death"),
+            photo_sources=photo_sources,
+        )
+    except Exception:
+        logger.exception("bulk export cache write failed while preparing %s", name)
+
+    logger.warning("bulk export generated missing cached profile for %s on demand", name)
+    return cached
+
+
+def _cache_hydrated_photos(cache_key: str, cached: dict, photos: list[str], photo_sources: dict[str, str]) -> None:
+    if not photos:
+        return
+    cached["photos"] = photos
+    cached["photo_sources"] = photo_sources
+    try:
+        set_biography(
+            cache_key,
+            cached.get("text", ""),
+            photos,
+            birth=cached.get("birth"),
+            death=cached.get("death"),
+            photo_sources=photo_sources,
+        )
+    except Exception:
+        logger.exception("Failed to persist hydrated export photos", extra={"profile_name": cache_key})
+
+
+def _hydrate_missing_export_photos(name: str, cached: dict) -> tuple[dict, list[str], dict[str, str]]:
+    cached = dict(cached)
+    photos = [photo for photo in (cached.get("photos") or []) if photo]
+    photo_sources = dict(cached.get("photo_sources") or {})
+    if photos:
+        return cached, photos, photo_sources
+
+    lookup_names = _dedupe_preserve_order([name, cached.get("name")])
+
+    for lookup_name in lookup_names:
+        rows = get_photos_by_person(lookup_name)
+        photos, photo_sources = _rows_to_photo_payload(rows)
+        if photos:
+            logger.warning("bulk export hydrated missing photos for %s from local photo index", name)
+            _cache_hydrated_photos(name, cached, photos, photo_sources)
+            return cached, photos, photo_sources
+
+    for lookup_name in lookup_names:
+        try:
+            downloaded = fetch_person_images(lookup_name) or []
+        except Exception:
+            logger.exception("bulk export photo fetch failed while hydrating %s", lookup_name)
+            downloaded = []
+
+        photos, photo_sources = _downloaded_to_photo_payload(downloaded)
+        if photos:
+            logger.warning("bulk export fetched missing photos for %s before export", name)
+            _cache_hydrated_photos(name, cached, photos, photo_sources)
+            return cached, photos, photo_sources
+
+    for lookup_name in lookup_names:
+        try:
+            person = fetch_person_from_wikipedia(lookup_name)
+        except Exception:
+            logger.exception("bulk export Wikipedia fallback failed while hydrating %s", lookup_name)
+            person = None
+
+        remote_photos = [
+            image
+            for image in ((person or {}).get("images") or [])
+            if isinstance(image, str) and image
+        ]
+        if remote_photos:
+            photo_sources = {photo: photo for photo in remote_photos}
+            logger.warning("bulk export using remote photo fallback for %s before export", name)
+            _cache_hydrated_photos(name, cached, remote_photos, photo_sources)
+            return cached, remote_photos, photo_sources
+
+    return cached, [], {}
+
+
 def schedule_bulk_export(export_id: str) -> None:
     state = get_bulk_export(export_id)
     if not state:
@@ -154,11 +326,9 @@ def run_bulk_export_item(export_id: str, name: str) -> None:
     try:
         cached = get_biography(name)
         if not cached:
-            update_job(export_id, name, status="failed", error="Профиль не найден в кэше", attempts=attempts, updated_at=time.time())
-            return
+            cached = _build_export_profile_on_demand(name)
 
-        photos = cached.get("photos", [])
-        photo_sources = cached.get("photo_sources") or {}
+        cached, photos, photo_sources = _hydrate_missing_export_photos(name, cached)
         photo_source_url = photo_sources.get(photos[0]) if photos else None
 
         result = export_profile_to_vkorni(
