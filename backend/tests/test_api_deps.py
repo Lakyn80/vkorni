@@ -1,7 +1,7 @@
 """Tests for api/deps.py — validate_name, json_response."""
 import pytest
 from fastapi import HTTPException
-from app.api.deps import validate_name, validate_person_name, json_response
+from app.api.deps import is_probable_person_name, validate_name, validate_person_name, json_response
 
 
 def test_validate_name_ok():
@@ -10,6 +10,14 @@ def test_validate_name_ok():
 
 def test_validate_person_name_normalizes_comma_name():
     assert validate_person_name("  Пушкин,   Александр   Сергеевич ") == "Пушкин Александр Сергеевич"
+
+
+def test_is_probable_person_name_accepts_normal_person():
+    assert is_probable_person_name("Пушкин Александр Сергеевич") is True
+
+
+def test_is_probable_person_name_rejects_category_like_entry():
+    assert is_probable_person_name("Участники Гражданской войны в России (красные)»") is False
 
 
 def test_validate_name_empty():

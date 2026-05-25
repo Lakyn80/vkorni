@@ -21,6 +21,14 @@ CORS_HEADERS = {
 }
 
 _WHITESPACE_RE = re.compile(r"\s+")
+_NON_PERSON_PREFIX_RE = re.compile(
+    r"^(?:категория|список|участники|персоналии|родившиеся|умершие|события|википедия|шаблон|портал|файл)\b",
+    flags=re.IGNORECASE,
+)
+_NON_PERSON_PHRASE_RE = re.compile(
+    r"\b(?:в\s+россии|в\s+ссср|гражданской\s+войны|великой\s+отечественной\s+войны|по\s+алфавиту)\b",
+    flags=re.IGNORECASE,
+)
 
 
 def normalize_name(name: str) -> str:
@@ -52,6 +60,21 @@ def validate_person_name(name: str) -> str:
     if any(ord(ch) < 32 for ch in cleaned):
         raise HTTPException(status_code=400, detail="Invalid characters in name")
     return cleaned
+
+
+def is_probable_person_name(name: str) -> bool:
+    cleaned = normalize_person_name(name)
+    if not cleaned:
+        return False
+    if _NON_PERSON_PREFIX_RE.search(cleaned):
+        return False
+    if _NON_PERSON_PHRASE_RE.search(cleaned):
+        return False
+    if cleaned.count("»") != cleaned.count("«"):
+        return False
+    if len(cleaned.split()) > 8:
+        return False
+    return True
 
 
 def json_response(payload: dict) -> JSONResponse:

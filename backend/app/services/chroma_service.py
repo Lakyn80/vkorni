@@ -15,6 +15,9 @@ def get_style_context(style_name: str | None = None, top_k: int = 3) -> str:
 
     results = search_styles(name, top_k=top_k)
     if not results:
-        logger.warning("No style found in Chroma", extra={"style": name})
+        if style_name:
+            logger.warning("No style found in Chroma", extra={"style": name})
+        else:
+            logger.info("Default style missing in Chroma; continuing without style", extra={"style": name})
         return ""
     return "\n".join([r["text"] for r in results])

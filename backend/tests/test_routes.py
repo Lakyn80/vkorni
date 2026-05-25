@@ -2,8 +2,17 @@
 Smoke-tests: verify all API routes return expected HTTP status codes.
 Business logic is tested in dedicated test_api_*.py files.
 """
+import sys
+import types
 from unittest.mock import patch
 from fastapi.testclient import TestClient
+
+fake_chroma_client = types.ModuleType("app.db.chroma_client")
+fake_chroma_client.get_style = lambda name: None
+fake_chroma_client.search_styles = lambda query, top_k=3: []
+fake_chroma_client.upsert_style = lambda name, text: None
+fake_chroma_client.add_document = lambda name, text: None
+sys.modules.setdefault("app.db.chroma_client", fake_chroma_client)
 
 from app.main import app
 
@@ -24,7 +33,7 @@ def test_smoke_cache_list(mock_list):
     assert client.get("/api/cache").status_code == 200
 
 
-@patch("app.api.biography.get_biography", return_value=None)
+@patch("app.api.biography.get_biography_strict", return_value=None)
 def test_smoke_cache_get_missing(mock_get):
     assert client.get("/api/cache/НетТакого").status_code == 404
 
@@ -55,12 +64,22 @@ def test_smoke_export_missing_body():
     assert client.post("/api/export", json={}).status_code == 422
 
 
+def test_smoke_bulk_export_rejects_non_person_entries():
+    response = client.post("/api/bulk-export", json={"names": ["Участники Гражданской войны в России (красные)»"]})
+    assert response.status_code == 400
+
+
 # ── batch ──────────────────────────────────────────────────────────────────────
 
 @patch("app.api.batch._create_batch", return_value="id1")
 @patch("app.api.batch.enqueue_job")
 def test_smoke_batch_create(mock_enqueue, mock_create):
     assert client.post("/api/batch", json={"names": ["Яшин"]}).status_code == 200
+
+
+def test_smoke_batch_rejects_non_person_entries():
+    response = client.post("/api/batch", json={"names": ["Участники Гражданской войны в России (красные)»"]})
+    assert response.status_code == 400
 
 
 @patch("app.api.batch.get_batch_status", return_value=None)

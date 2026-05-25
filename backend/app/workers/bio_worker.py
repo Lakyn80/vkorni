@@ -15,6 +15,7 @@ import time
 
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
+from app.api.deps import is_probable_person_name
 from app.services.batch_service import update_job
 from app.services.wiki_service import fetch_person_from_wikipedia, fetch_person_images
 from app.services.deepseek_service import generate_text
@@ -62,6 +63,9 @@ def process_biography(batch_id: str, name: str, style_name: str | None = None) -
     update_job(batch_id, name, status="running", started_at=time.time())
 
     try:
+        if not is_probable_person_name(name):
+            return _fail(batch_id, name, "Rejected non-person batch entry")
+
         # ── 1. Fetch source data ────────────────────────────────────────────
         try:
             person = _fetch_wiki(name)

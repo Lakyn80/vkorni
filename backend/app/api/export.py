@@ -15,7 +15,7 @@ from uuid import uuid4
 from fastapi import APIRouter, File, HTTPException, UploadFile
 from pydantic import BaseModel, Field
 
-from app.api.deps import json_response, validate_name
+from app.api.deps import is_probable_person_name, json_response, validate_name, validate_person_name
 from app.config import settings
 from app.db.stored_profiles_repo import add_stored_profile_attempt, get_stored_profile, list_stored_profiles
 from app.services.bulk_export_service import create_bulk_export, get_bulk_export
@@ -185,15 +185,17 @@ def resend_exported_profile(profile_id: int):
 
 @router.post("/bulk-export")
 def start_bulk_export(payload: BulkExportRequest):
-    if not payload.names:
-        raise HTTPException(status_code=400, detail="No names provided")
+    normalized_names = [validate_person_name(name) for name in payload.names if name and name.strip()]
+    names = [name for name in normalized_names if is_probable_person_name(name)]
+    if not names:
+        raise HTTPException(status_code=400, detail="No valid person names provided")
     try:
-        export_id = create_bulk_export(payload.names)
+        export_id = create_bulk_export(names)
         schedule_bulk_export(export_id)
     except Exception as exc:
         logger.error("Failed to start bulk export: %s", exc)
         raise HTTPException(status_code=503, detail="Bulk export queue unavailable — please retry later")
-    return json_response({"export_id": export_id, "total": len(payload.names)})
+    return json_response({"export_id": export_id, "total": len(names)})
 
 
 @router.get("/bulk-export/{export_id}")
